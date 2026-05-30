@@ -12,8 +12,7 @@ anthropic==0.28.0
 langchain==0.2.3
 langchain-text-splitters==0.2.2
 langchain-openai==0.1.8
-langchain-pinecone==0.1.1
-pinecone-client==4.1.0
+pinecone==5.0.1
 openai==1.30.3
 kafka-python==2.0.2
 celery==5.4.0
@@ -28,8 +27,7 @@ scikit-learn==1.5.0
 pandas==2.2.2
 numpy==1.26.4
 shap==0.45.1
-transformers==4.41.1
-torch==2.3.0+cpu
+# torch + transformers: installed separately in CI (ci.yml) and Docker (Dockerfile)
 pytest==8.2.1
 pytest-asyncio==0.23.7
 pytest-cov==5.0.0

@@ -12,9 +12,17 @@ COPY requirements.txt .
 RUN apt-get update && apt-get install -y build-essential libpq-dev python3-dev \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip && \
+    pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+      torch==2.3.0+cpu transformers==4.41.1
+RUN pip install --upgrade pip && \
     pip wheel --wheel-dir /wheels \
     --extra-index-url https://download.pytorch.org/whl/cpu \
-    -r requirements.txt
+    torch==2.3.0+cpu transformers==4.41.1 && \
+    pip wheel --wheel-dir /wheels \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r requirements.txt \
+    --no-build-isolation \
+    2>&1 | tee /build.log || (cat /build.log && exit 1)
 
 # ── Runtime: slim image, non-root ──────────────────────────────────────────────
 FROM python:3.11-slim-bookworm AS runtime
