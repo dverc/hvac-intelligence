@@ -1,0 +1,35 @@
+{
+  "type": "call-ended",
+  "call": {
+    "id": "call_fixture_001",
+    "customer": { "number": "+15552001001" },
+    "startedAt": "2025-05-28T14:00:00Z",
+    "endedAt": "2025-05-28T14:08:30Z"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "message": "Thank you for calling HVAC Intelligence. How can I help you today?"
+    },
+    {
+      "role": "user",
+      "message": "My air conditioner stopped working again. This is the third time this summer and I'm really frustrated.",
+      "words": [
+        { "word": "My", "start_ms": 0, "end_ms": 120 },
+        { "word": "air", "start_ms": 121, "end_ms": 280 },
+        { "word": "conditioner", "start_ms": 281, "end_ms": 700 },
+        { "word": "stopped", "start_ms": 701, "end_ms": 1000 },
+        { "word": "working", "start_ms": 1001, "end_ms": 1300 },
+        { "word": "again.", "start_ms": 1301, "end_ms": 1600 }
+      ]
+    },
+    {
+      "role": "user",
+      "message": "It's hot in the house and I need someone out here tomorrow morning.",
+      "words": [
+        { "word": "It's", "start_ms": 2000, "end_ms": 2200 },
+        { "word": "hot", "start_ms": 2201, "end_ms": 2400 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# HVAC Intelligence Platform — Cursor Agent Rules
+
+## Law 1: Specification Authority
+Always cross-reference `docs/PROJECT_SPEC.md` before generating any application logic or endpoints.
+
+## Law 2: Static Typing
+Maintain strict static typing:
+- Python: Pydantic models and FastAPI type annotations throughout the backend and ML services.
+- TypeScript: Enable strict mode in Next.js; no implicit `any`; typed API contracts and props.
+
+## Law 3: Architecture & I/O
+Prioritize modularity, clear API boundaries, and asynchronous I/O operations.
+- Keep backend, frontend, ml_engine, and infrastructure concerns separated.
+- Prefer async endpoints, non-blocking database/Redis access, and well-defined service interfaces.
+- Do not couple the voice agent, churn model, and dashboard beyond documented APIs.

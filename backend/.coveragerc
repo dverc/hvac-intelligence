@@ -1,0 +1,10 @@
+[run]
+source = app
+omit =
+    app/pipeline/kafka_consumer.py
+    app/pipeline/celery_app.py
+    */ml/training/train_churn_model.py
+
+[report]
+show_missing = True
+precision = 1

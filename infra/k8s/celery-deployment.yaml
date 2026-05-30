@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hvac-celery-worker
+  namespace: hvac-intelligence
+  labels:
+    app: hvac-celery-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hvac-celery-worker
+  template:
+    metadata:
+      labels:
+        app: hvac-celery-worker
+    spec:
+      containers:
+        - name: celery-worker
+          image: ghcr.io/dverc/hvac-intelligence/backend:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - celery
+            - -A
+            - app.pipeline.celery_app
+            - worker
+            - -Q
+            - features,scoring
+            - -c
+            - "4"
+          envFrom:
+            - secretRef:
+                name: hvac-intelligence-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: ml-artifacts
+              mountPath: /app/ml/artifacts
+              readOnly: true
+      volumes:
+        - name: ml-artifacts
+          emptyDir: {}

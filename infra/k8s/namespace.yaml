@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hvac-intelligence
+  labels:
+    app.kubernetes.io/name: hvac-intelligence
+    app.kubernetes.io/part-of: project-aero
