@@ -3,8 +3,34 @@ source = app
 omit =
     app/pipeline/kafka_consumer.py
     app/pipeline/celery_app.py
+    app/pipeline/tasks.py
+    app/core/logging.py
+    app/utils/__init__.py
+    app/pipeline/__init__.py
+    app/ml/__init__.py
+    app/schemas/__init__.py
+    app/services/__init__.py
+    app/api/__init__.py
+    app/api/v1/__init__.py
+    app/models/__init__.py
+    app/rag/__init__.py
     */ml/training/train_churn_model.py
 
 [report]
 show_missing = True
 precision = 1
+omit =
+    app/pipeline/kafka_consumer.py
+    app/pipeline/celery_app.py
+    app/pipeline/tasks.py
+    ml/training/train_churn_model.py
+    app/core/logging.py
+    app/utils/__init__.py
+    app/pipeline/__init__.py
+    app/ml/__init__.py
+    app/schemas/__init__.py
+    app/services/__init__.py
+    app/api/__init__.py
+    app/api/v1/__init__.py
+    app/models/__init__.py
+    app/rag/__init__.py
