@@ -51,7 +51,11 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
+  # deploy-kubernetes requires a configured cluster and KUBECONFIG secret.
+  # Disabled until production infrastructure is provisioned.
+  # To enable: remove 'if: false' and set KUBECONFIG in GitHub repo secrets.
   deploy-kubernetes:
+    if: false
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
