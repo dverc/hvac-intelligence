@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Any
+from typing import Any, Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.customer import Customer
@@ -31,9 +32,12 @@ class EquipmentService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def create_equipment(self, args: CreateEquipmentArgs) -> dict[str, Any]:
+    async def create_equipment(
+        self, args: CreateEquipmentArgs, org_id: uuid.UUID
+    ) -> dict[str, Any]:
         customer = await self.db.get(Customer, uuid.UUID(args.customer_id))
-        if customer is None:
+        # Ownership check: cannot attach equipment to another org's customer.
+        if customer is None or customer.org_id != org_id:
             return {
                 "success": False,
                 "error": f"Customer {args.customer_id} not found",
@@ -49,6 +53,7 @@ class EquipmentService:
             metadata["install_year"] = args.install_year
 
         equipment = Equipment(
+            org_id=org_id,
             customer_id=customer.customer_id,
             make=args.make or "Unknown",
             model=args.model or "Unknown",
@@ -75,3 +80,13 @@ class EquipmentService:
                 f"registered for {customer.full_name}."
             ),
         }
+
+    async def get_equipment(
+        self, equipment_id: uuid.UUID, org_id: uuid.UUID
+    ) -> Optional[Equipment]:
+        """Fetch equipment scoped to org. Cross-tenant ids return None."""
+        stmt = select(Equipment).where(
+            Equipment.equipment_id == equipment_id,
+            Equipment.org_id == org_id,
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()

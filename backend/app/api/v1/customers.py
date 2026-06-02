@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 
 from app.api.deps import get_analytics_service, get_customer_service
+from app.core.tenant import get_dashboard_org_id
 from app.models.call_transcript import CallTranscript
 from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
@@ -27,8 +28,9 @@ async def list_customers(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     customer_service: CustomerService = Depends(get_customer_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> dict:
-    stmt = select(Customer)
+    stmt = select(Customer).where(Customer.org_id == org_id)
     if search:
         pattern = f"%{search}%"
         stmt = stmt.where(
@@ -50,7 +52,10 @@ async def list_customers(
     score_rows = (
         await customer_service.db.execute(
             select(ChurnScore)
-            .where(ChurnScore.entity_type == "CUSTOMER")
+            .where(
+                ChurnScore.org_id == org_id,
+                ChurnScore.entity_type == "CUSTOMER",
+            )
             .order_by(ChurnScore.score_timestamp.desc())
         )
     ).scalars().all()
@@ -83,8 +88,9 @@ async def list_customers(
 async def get_customer(
     customer_id: uuid.UUID,
     customer_service: CustomerService = Depends(get_customer_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> dict:
-    customer = await customer_service.get_by_id(customer_id)
+    customer = await customer_service.get_by_id(customer_id, org_id)
     if customer is None:
         raise HTTPException(status_code=404, detail="Customer not found")
     return await customer_service.build_customer_profile(customer)
@@ -95,10 +101,11 @@ async def patch_customer(
     customer_id: uuid.UUID,
     body: CustomerUpdate,
     customer_service: CustomerService = Depends(get_customer_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> dict:
     if not body.model_fields_set:
         raise HTTPException(status_code=400, detail="No fields to update")
-    customer = await customer_service.update_customer(customer_id, body)
+    customer = await customer_service.update_customer(customer_id, body, org_id)
     if customer is None:
         raise HTTPException(status_code=404, detail="Customer not found")
     return await customer_service.build_customer_profile(customer)
@@ -111,11 +118,15 @@ async def patch_customer(
 async def get_customer_transcripts(
     customer_id: uuid.UUID,
     customer_service: CustomerService = Depends(get_customer_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> CustomerTranscriptsResponse:
     rows = (
         await customer_service.db.execute(
             select(CallTranscript)
-            .where(CallTranscript.customer_id == customer_id)
+            .where(
+                CallTranscript.org_id == org_id,
+                CallTranscript.customer_id == customer_id,
+            )
             .order_by(CallTranscript.call_start_utc.desc())
         )
     ).scalars().all()
@@ -129,6 +140,7 @@ async def get_customer_transcripts(
 async def get_customer_churn_timeline(
     customer_id: uuid.UUID,
     analytics: AnalyticsService = Depends(get_analytics_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> ChurnTimelineResponse:
     try:
         return await analytics.get_churn_timeline(customer_id)

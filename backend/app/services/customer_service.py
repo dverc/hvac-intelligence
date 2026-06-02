@@ -13,8 +13,10 @@ from sqlalchemy.orm import selectinload
 
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
+from app.models.organization import Organization
 from app.models.support_ticket import SupportTicket
 from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
+from app.schemas.organization import OrganizationSettings
 from app.schemas.tools import CreateCustomerArgs
 from app.services.churn_service import ChurnService
 
@@ -25,6 +27,34 @@ _ADDRESS_FIELD_MAP = {
     "state": "state",
     "zip": "zip",
 }
+
+
+def _build_business_context(
+    org: Organization, settings: OrganizationSettings
+) -> str:
+    """Tenant-specific BUSINESS CONTEXT block injected into the system prompt."""
+    issue_types = ", ".join(settings.issue_taxonomy) or "general service requests"
+    segments = ", ".join(settings.customer_segments) or "residential"
+    hours = settings.business_hours
+    hours_line = ""
+    if isinstance(hours, dict) and hours:
+        hours_line = f"\n- Business hours: {hours}"
+    return (
+        "BUSINESS CONTEXT:\n"
+        f"- Company: {org.org_name}\n"
+        f"- Industry: {org.industry}\n"
+        f"- Supported issue types: {issue_types}\n"
+        f"- Customer segments: {segments}\n"
+        f"- Timezone: {settings.timezone}"
+        f"{hours_line}"
+    )
+
+
+def _apply_prompt_override(override: str | None, assembled: str) -> str:
+    """Prepend a tenant system_prompt_override to the assembled prompt."""
+    if override:
+        return f"{override.strip()}\n\n{assembled}"
+    return assembled
 
 
 def normalize_phone(phone: str) -> str:
@@ -41,25 +71,31 @@ class CustomerService:
         self.db = db
         self._churn = ChurnService(db)
 
-    async def lookup_by_phone(self, phone: str) -> Optional[Customer]:
+    async def lookup_by_phone(
+        self, phone: str, org_id: uuid.UUID
+    ) -> Optional[Customer]:
         normalized = normalize_phone(phone)
         digits = re.sub(r"\D", "", normalized)
         stmt = select(Customer).where(
+            Customer.org_id == org_id,
             or_(
                 Customer.phone_primary == phone,
                 Customer.phone_primary == normalized,
                 Customer.phone_secondary == phone,
                 Customer.phone_secondary == normalized,
                 func.regexp_replace(Customer.phone_primary, r"\D", "", "g") == digits,
-            )
+            ),
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_id(self, customer_id: uuid.UUID) -> Optional[Customer]:
+    async def get_by_id(
+        self, customer_id: uuid.UUID, org_id: uuid.UUID
+    ) -> Optional[Customer]:
+        """Fetch a customer scoped to org. Cross-tenant ids return None (404)."""
         stmt = (
             select(Customer)
-            .where(Customer.customer_id == customer_id)
+            .where(Customer.customer_id == customer_id, Customer.org_id == org_id)
             .options(
                 selectinload(Customer.equipment),
                 selectinload(Customer.dispatch_jobs),
@@ -69,9 +105,10 @@ class CustomerService:
         return result.scalar_one_or_none()
 
     async def update_customer(
-        self, customer_id: uuid.UUID, payload: CustomerUpdate
+        self, customer_id: uuid.UUID, payload: CustomerUpdate, org_id: uuid.UUID
     ) -> Optional[Customer]:
-        customer = await self.get_by_id(customer_id)
+        # Ownership check: a customer belonging to another org is invisible (None -> 404).
+        customer = await self.get_by_id(customer_id, org_id)
         if customer is None:
             return None
 
@@ -94,11 +131,13 @@ class CustomerService:
 
         await self.db.flush()
         await self.db.refresh(customer)
-        return await self.get_by_id(customer_id)
+        return await self.get_by_id(customer_id, org_id)
 
-    async def create_customer(self, args: CreateCustomerArgs) -> dict[str, Any]:
+    async def create_customer(
+        self, args: CreateCustomerArgs, org_id: uuid.UUID
+    ) -> dict[str, Any]:
         normalized_phone = normalize_phone(args.phone_primary)
-        existing = await self.lookup_by_phone(normalized_phone)
+        existing = await self.lookup_by_phone(normalized_phone, org_id)
         if existing is not None:
             return {
                 "success": False,
@@ -109,6 +148,7 @@ class CustomerService:
             }
 
         customer = Customer(
+            org_id=org_id,
             external_id=f"VOICE-{secrets.token_hex(4).upper()}",
             full_name=args.full_name.strip(),
             phone_primary=normalized_phone,
@@ -139,20 +179,25 @@ class CustomerService:
             ),
         }
 
-    async def get_by_email(self, email: str) -> Optional[Customer]:
-        stmt = select(Customer).where(func.lower(Customer.email) == email.lower())
+    async def get_by_email(
+        self, email: str, org_id: uuid.UUID
+    ) -> Optional[Customer]:
+        stmt = select(Customer).where(
+            Customer.org_id == org_id,
+            func.lower(Customer.email) == email.lower(),
+        )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def lookup(
-        self, lookup_method: str, lookup_value: str
+        self, lookup_method: str, lookup_value: str, org_id: uuid.UUID
     ) -> Optional[Customer]:
         if lookup_method == "phone":
-            return await self.lookup_by_phone(lookup_value)
+            return await self.lookup_by_phone(lookup_value, org_id)
         if lookup_method == "customer_id":
-            return await self.get_by_id(uuid.UUID(lookup_value))
+            return await self.get_by_id(uuid.UUID(lookup_value), org_id)
         if lookup_method == "email":
-            return await self.get_by_email(lookup_value)
+            return await self.get_by_email(lookup_value, org_id)
         return None
 
     async def _equipment_with_computed_age(
@@ -206,8 +251,11 @@ class CustomerService:
         return list(result.scalars().all())
 
     async def build_customer_profile(self, customer: Customer) -> dict[str, Any]:
+        # customer is already org-verified by the caller; reuse its org for child scopes.
         equipment_rows = await self._equipment_with_computed_age(customer.customer_id)
-        churn = await self._churn.get_latest_score(str(customer.customer_id))
+        churn = await self._churn.get_latest_score(
+            str(customer.customer_id), customer.org_id
+        )
         jobs = await self._recent_jobs(customer.customer_id)
         open_tickets = await self._open_tickets(customer.customer_id)
 
@@ -269,20 +317,28 @@ class CustomerService:
         }
 
     async def get_customer_info(
-        self, lookup_method: str, lookup_value: str
+        self, lookup_method: str, lookup_value: str, org_id: uuid.UUID
     ) -> dict[str, Any]:
-        customer = await self.lookup(lookup_method, lookup_value)
+        customer = await self.lookup(lookup_method, lookup_value, org_id)
         if customer is None:
             return {"found": False, "message": "Customer not found"}
         profile = await self.build_customer_profile(customer)
         profile["found"] = True
         return profile
 
-    async def get_call_context(self, phone: str, call_id: str) -> dict[str, Any]:
+    async def get_call_context(
+        self, phone: str, call_id: str, org: Organization
+    ) -> dict[str, Any]:
         normalized_phone = normalize_phone(phone)
-        customer = await self.lookup_by_phone(phone)
+        settings = OrganizationSettings.model_validate(org.settings or {})
+        business_context = _build_business_context(org, settings)
+        first_message = settings.first_message
+        prompt_override = settings.system_prompt_override
+
+        customer = await self.lookup_by_phone(phone, org.org_id)
         if customer is None:
             unknown_prompt = (
+                f"{business_context}\n\n"
                 "CALLER STATUS: Unknown phone number (no CRM match).\n"
                 f"call_id: {call_id}\n"
                 f"caller_phone: {normalized_phone}\n\n"
@@ -299,6 +355,7 @@ class CustomerService:
             return {
                 "variable_values": {
                     "call_id": call_id,
+                    "company_name": org.org_name,
                     "caller_phone": normalized_phone,
                     "customer_name": "Unknown caller",
                     "customer_id": "N/A",
@@ -310,7 +367,10 @@ class CustomerService:
                         "New caller onboarding: offer create_customer or lookup by alternate contact."
                     ),
                 },
-                "system_prompt_injection": unknown_prompt,
+                "system_prompt_injection": _apply_prompt_override(
+                    prompt_override, unknown_prompt
+                ),
+                "first_message": first_message,
             }
 
         profile = await self.build_customer_profile(customer)
@@ -338,6 +398,7 @@ class CustomerService:
             )
 
         system_prompt = (
+            f"{business_context}\n\n"
             f"CUSTOMER CONTEXT (call_id={call_id}):\n"
             f"- Name: {customer.full_name}\n"
             f"- customer_id: {customer.customer_id}\n"
@@ -362,6 +423,7 @@ class CustomerService:
         return {
             "variable_values": {
                 "call_id": call_id,
+                "company_name": org.org_name,
                 "customer_name": customer.full_name,
                 "customer_id": str(customer.customer_id),
                 "account_status": (
@@ -372,7 +434,10 @@ class CustomerService:
                 "churn_risk": f"{risk_tier} ({churn_prob:.1%})",
                 "retention_protocol": retention_protocol,
             },
-            "system_prompt_injection": system_prompt.strip(),
+            "system_prompt_injection": _apply_prompt_override(
+                prompt_override, system_prompt.strip()
+            ),
             "customer_id": str(customer.customer_id),
+            "first_message": first_message,
         }
 

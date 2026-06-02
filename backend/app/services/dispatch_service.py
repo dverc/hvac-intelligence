@@ -55,15 +55,24 @@ class DispatchService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def _select_technician(self, customer: Customer) -> Technician:
+    async def _select_technician(
+        self, customer: Customer, org_id: uuid.UUID
+    ) -> Technician:
         if customer.preferred_tech_id:
             tech = await self.db.get(Technician, customer.preferred_tech_id)
-            if tech and tech.employment_status == "ACTIVE":
+            if (
+                tech
+                and tech.org_id == org_id
+                and tech.employment_status == "ACTIVE"
+            ):
                 return tech
 
         stmt = (
             select(Technician)
-            .where(Technician.employment_status == "ACTIVE")
+            .where(
+                Technician.org_id == org_id,
+                Technician.employment_status == "ACTIVE",
+            )
             .order_by(Technician.avg_customer_rating.desc().nullslast())
             .limit(1)
         )
@@ -80,6 +89,7 @@ class DispatchService:
         priority: str,
         preferred_window: str,
         issue_description: str,
+        org_id: uuid.UUID,
         equipment_id: Optional[str] = None,
         access_instructions: Optional[str] = None,
         churn_context: Optional[dict[str, Any]] = None,
@@ -88,11 +98,11 @@ class DispatchService:
         customer = await self.db.get(
             Customer, cid, options=[selectinload(Customer.preferred_tech)]
         )
-        if customer is None:
+        if customer is None or customer.org_id != org_id:
             raise ValueError(f"Customer {customer_id} not found")
 
         applied_priority, retention_flag = _apply_retention_priority(priority, churn_context)
-        technician = await self._select_technician(customer)
+        technician = await self._select_technician(customer, org_id)
         window_start, window_end = _parse_preferred_window(preferred_window)
 
         job_number = _generate_job_number()
@@ -110,6 +120,7 @@ class DispatchService:
 
         job = DispatchJob(
             job_number=job_number,
+            org_id=org_id,
             customer_id=cid,
             equipment_id=uuid.UUID(equipment_id) if equipment_id else None,
             technician_id=technician.technician_id,
@@ -153,9 +164,12 @@ class DispatchService:
             ),
         }
 
-    async def update_job(self, args: UpdateDispatchArgs) -> dict[str, Any]:
+    async def update_job(
+        self, args: UpdateDispatchArgs, org_id: uuid.UUID
+    ) -> dict[str, Any]:
         job = await self.db.get(DispatchJob, uuid.UUID(args.job_id))
-        if job is None:
+        # Ownership check: a job from another org is treated as not found.
+        if job is None or job.org_id != org_id:
             return {"success": False, "error": f"Dispatch job {args.job_id} not found"}
 
         changes: list[str] = []

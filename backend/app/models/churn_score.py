@@ -10,15 +10,18 @@ from sqlalchemy import (
     CheckConstraint,
     Computed,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
     String,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.constants import SEED_ORG_ID_STR
 from app.core.database import Base
 
 
@@ -50,6 +53,13 @@ class ChurnScore(Base):
 
     score_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.org_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=text(f"'{SEED_ORG_ID_STR}'"),
     )
     entity_type: Mapped[str] = mapped_column(String(8), nullable=False)
     entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)

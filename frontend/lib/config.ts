@@ -3,6 +3,10 @@ export function getPublicApiKey(): string | undefined {
   return key || undefined;
 }
 
+export function getOrgName(): string {
+  return process.env.NEXT_PUBLIC_ORG_NAME?.trim() || "HVAC Intelligence";
+}
+
 export function isApiKeyConfigured(): boolean {
   return Boolean(getPublicApiKey());
 }

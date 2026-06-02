@@ -26,7 +26,9 @@ class TranscriptService:
         self._churn = ChurnService(db)
         self._feature_extractor = FeatureExtractor()
 
-    async def process_completed_call(self, call_data: dict[str, Any]) -> Optional[dict[str, Any]]:
+    async def process_completed_call(
+        self, call_data: dict[str, Any], org_id: uuid.UUID
+    ) -> Optional[dict[str, Any]]:
         call = call_data.get("call", call_data)
         call_id = call.get("id") or call_data.get("call_id")
         if not call_id:
@@ -42,10 +44,12 @@ class TranscriptService:
         customer_id: Optional[uuid.UUID] = None
         churn_start: Optional[float] = None
         if phone:
-            customer = await self._customers.lookup_by_phone(phone)
+            customer = await self._customers.lookup_by_phone(phone, org_id)
             if customer:
                 customer_id = customer.customer_id
-                score = await self._churn.get_latest_score(str(customer.customer_id))
+                score = await self._churn.get_latest_score(
+                    str(customer.customer_id), org_id
+                )
                 churn_start = score.get("churn_probability")
 
         transcript_text = _extract_transcript_text(call_data)
@@ -74,6 +78,7 @@ class TranscriptService:
 
         record = CallTranscript(
             call_id=call_id,
+            org_id=org_id,
             customer_id=customer_id,
             dispatch_job_id=dispatch_job_id,
             call_direction="INBOUND",
@@ -146,6 +151,16 @@ class TranscriptService:
         self.db.add(record)
         await self.db.flush()
         return _persistence_summary(record)
+
+    async def get_transcript(
+        self, call_id: str, org_id: uuid.UUID
+    ) -> Optional[CallTranscript]:
+        """Fetch a transcript scoped to org. Cross-tenant call_ids return None."""
+        stmt = select(CallTranscript).where(
+            CallTranscript.call_id == call_id,
+            CallTranscript.org_id == org_id,
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
 
     async def _find_recent_dispatch_job(
         self,

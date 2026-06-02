@@ -10,16 +10,19 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.constants import SEED_ORG_ID_STR
 from app.core.database import Base
 
 
@@ -31,11 +34,12 @@ class FeatureStore(Base):
             name="ck_feature_store_entity_type",
         ),
         UniqueConstraint(
+            "org_id",
             "entity_type",
             "entity_id",
             "window_end",
             "window_days",
-            name="uq_feature_store_entity_window",
+            name="uq_feature_store_org_entity_window",
         ),
         Index(
             "idx_features_entity",
@@ -48,6 +52,13 @@ class FeatureStore(Base):
 
     feature_record_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.org_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=text(f"'{SEED_ORG_ID_STR}'"),
     )
     entity_type: Mapped[str] = mapped_column(String(8), nullable=False)
     entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)

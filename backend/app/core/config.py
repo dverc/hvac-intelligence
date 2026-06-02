@@ -18,8 +18,16 @@ class Settings(BaseSettings):
     # Dashboard API authentication (required — no default; set in .env)
     DASHBOARD_API_KEY: str
 
+    # Dashboard tenant scoping (stopgap until JWT carries org in a later phase).
+    # Defaults to the deterministic seed org so single-tenant dev keeps working.
+    DASHBOARD_ORG_ID: str = "00000000-0000-4000-8000-000000000001"
+
     # Vapi webhook HMAC bypass — local dev only; ignored in production
     VAPI_WEBHOOK_HMAC_BYPASS: bool = False
+
+    # Fallback inbound number used to resolve a tenant when the webhook
+    # payload does not carry the called number.
+    VAPI_PHONE_NUMBER: str = ""
     
     # Database
     DATABASE_URL: str                    # postgresql+asyncpg://user:pass@host:5432/hvac_intel

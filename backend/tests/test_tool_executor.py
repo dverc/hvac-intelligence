@@ -17,13 +17,18 @@ from app.services.tool_executor import ToolExecutor
 
 @pytest.fixture
 def tool_executor(db_session, mock_rag_retriever):
-    return ToolExecutor(
+    from app.core.constants import SEED_ORG_ID
+
+    executor = ToolExecutor(
         customer_service=CustomerService(db_session),
         dispatch_service=DispatchService(db_session),
         churn_service=ChurnService(db_session),
         ticket_service=TicketService(db_session),
         rag_retriever=mock_rag_retriever,
     )
+    # Tenant must be set before handlers run (mirrors webhook resolution).
+    executor.set_tenant(SEED_ORG_ID)
+    return executor
 
 
 @pytest.mark.asyncio

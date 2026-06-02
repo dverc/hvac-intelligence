@@ -28,6 +28,7 @@ class TicketService:
     async def create_ticket(
         self,
         customer_id: uuid.UUID,
+        org_id: uuid.UUID,
         ticket_type: str,
         subject: str,
         description: str,
@@ -37,6 +38,7 @@ class TicketService:
         created_by: str = "VOICE_AGENT",
     ) -> dict[str, Any]:
         ticket = SupportTicket(
+            org_id=org_id,
             customer_id=customer_id,
             call_transcript_id=call_transcript_id,
             ticket_type=ticket_type,

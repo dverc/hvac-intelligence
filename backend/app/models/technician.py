@@ -9,15 +9,19 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKey,
     Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import SEED_ORG_ID_STR
 from app.core.database import Base
 
 if TYPE_CHECKING:
@@ -37,12 +41,22 @@ class Technician(Base):
             "churn_risk_tier IN ('LOW','MEDIUM','HIGH','CRITICAL')",
             name="ck_technicians_churn_risk_tier",
         ),
+        UniqueConstraint(
+            "org_id", "employee_number", name="uq_technicians_org_employee_number"
+        ),
     )
 
     technician_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    employee_number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.org_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=text(f"'{SEED_ORG_ID_STR}'"),
+    )
+    employee_number: Mapped[str] = mapped_column(String(32), nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String(20))
     email: Mapped[Optional[str]] = mapped_column(String(255))

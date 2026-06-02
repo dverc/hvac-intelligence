@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { getOrgName } from "@/lib/config";
+
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/customers", label: "Customers" },
@@ -11,12 +13,13 @@ const NAV_ITEMS = [
 
 export function DashboardNav() {
   const pathname = usePathname();
+  const orgName = getOrgName();
 
   return (
     <nav className="flex flex-col gap-1 p-4">
       <div className="mb-6 px-2">
-        <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400">HVAC Intelligence</p>
-        <p className="text-xs text-gray-500 dark:text-slate-400">Project Aero Dashboard</p>
+        <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{orgName}</p>
+        <p className="text-xs text-gray-500 dark:text-slate-400">Churn Intelligence Dashboard</p>
       </div>
       {NAV_ITEMS.map((item) => {
         const active =

@@ -72,6 +72,7 @@ for _key, _value in _DEFAULTS.items():
 
 from app.core.config import get_settings  # noqa: E402
 from app.core.database import Base, get_engine, get_session_factory  # noqa: E402
+import app.models  # noqa: E402,F401  (register all ORM tables on Base.metadata)
 
 get_settings.cache_clear()
 
@@ -171,6 +172,14 @@ class MockToolExecutor:
         self.customer_service = MagicMock()
         self.churn_service = MagicMock()
         self.calls: list[tuple[str, dict]] = []
+        # Tenant context attributes mirrored from the real ToolExecutor.
+        self.org_id = None
+        self.org_settings = None
+        self.db = None
+
+    def set_tenant(self, org_id, settings=None) -> None:
+        self.org_id = org_id
+        self.org_settings = settings
 
     async def execute_batch(self, tool_call_list: list[dict]) -> list[dict]:
         from app.services.tool_executor import _parse_vapi_tool_call
@@ -238,9 +247,41 @@ async def database_ready() -> AsyncGenerator[Any, None]:
     )
     get_engine.cache_clear()
 
+    # SAFETY: only ever reset a database whose name marks it as a test DB.
+    # This prevents the destructive DROP SCHEMA from running against the dev DB
+    # if the test DB URL ever falls back to the primary database.
+    active_db_url = os.environ["DATABASE_URL"]
+    is_test_db = "test" in active_db_url.rsplit("/", 1)[-1].lower()
+
     async with engine.begin() as conn:
+        if is_test_db:
+            # Reset the test schema so model changes (e.g. new org_id columns)
+            # always apply cleanly regardless of prior runs' DDL.
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        # Seed organization (matches migration 005) so FK org_id and the column
+        # server_default resolve in the test database.
+        from app.core.constants import SEED_ORG_ID_STR
+
+        await conn.execute(
+            text(
+                """
+                INSERT INTO organizations
+                    (org_id, org_name, slug, industry, business_phone,
+                     plan_tier, is_active, settings)
+                VALUES
+                    (CAST(:org_id AS UUID), 'HVAC Intelligence Demo', 'hvac-demo',
+                     'hvac', '+19498800687', 'professional', true,
+                     CAST(:settings AS JSONB))
+                ON CONFLICT (org_id) DO NOTHING
+                """
+            ).bindparams(
+                org_id=SEED_ORG_ID_STR,
+                settings='{"pinecone_namespace": "hvac-knowledge"}',
+            )
+        )
         await conn.execute(
             text(
                 """
@@ -294,6 +335,7 @@ async def db_session(database_ready) -> AsyncGenerator[AsyncSession, None]:
 @pytest_asyncio.fixture
 async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
     """Seed one HIGH-risk customer with equipment, call, job, and ticket."""
+    from app.core.constants import SEED_ORG_ID
     from app.models.call_transcript import CallTranscript
     from app.models.customer import Customer
     from app.models.dispatch_job import DispatchJob
@@ -302,6 +344,7 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
     from app.models.technician import Technician
 
     tech = Technician(
+        org_id=SEED_ORG_ID,
         employee_number=f"T-TEST-{uuid.uuid4().hex[:8]}",
         full_name="Test Tech",
         phone="+15550001111",
@@ -313,6 +356,7 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
 
     phone = f"+1555{uuid.uuid4().int % 100000000:08d}"
     customer = Customer(
+        org_id=SEED_ORG_ID,
         full_name="Sarah Mitchell",
         phone_primary=phone,
         customer_since=date(2019, 6, 1),
@@ -329,6 +373,7 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
     await db_session.flush()
 
     equipment = Equipment(
+        org_id=SEED_ORG_ID,
         customer_id=customer.customer_id,
         make="Carrier",
         model="Infinity 24",
@@ -342,6 +387,7 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     transcript = CallTranscript(
         call_id="call-seed-001",
+        org_id=SEED_ORG_ID,
         customer_id=customer.customer_id,
         call_direction="INBOUND",
         call_start_utc=now - timedelta(days=2),
@@ -362,6 +408,7 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
 
     job = DispatchJob(
         job_number="DX-SEED-001",
+        org_id=SEED_ORG_ID,
         customer_id=customer.customer_id,
         equipment_id=equipment.equipment_id,
         technician_id=tech.technician_id,
@@ -376,6 +423,7 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
     db_session.add(job)
 
     ticket = SupportTicket(
+        org_id=SEED_ORG_ID,
         customer_id=customer.customer_id,
         call_transcript_id=transcript.transcript_id,
         ticket_type="COMPLAINT_ESCALATION",
@@ -395,6 +443,56 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
         "transcript_id": str(transcript.transcript_id),
         "phone": customer.phone_primary,
     }
+
+
+@pytest_asyncio.fixture
+async def make_org(db_session: AsyncSession):
+    """Factory: create an active Organization with unique slug/phone."""
+    from app.models.organization import Organization
+
+    async def _make(
+        *,
+        name: str,
+        slug: str | None = None,
+        business_phone: str | None = None,
+        settings: dict[str, Any] | None = None,
+    ) -> Organization:
+        org = Organization(
+            org_name=name,
+            slug=slug or f"org-{uuid.uuid4().hex[:8]}",
+            industry="hvac",
+            business_phone=business_phone,
+            plan_tier="starter",
+            is_active=True,
+            settings=settings or {},
+        )
+        db_session.add(org)
+        await db_session.flush()
+        return org
+
+    return _make
+
+
+@pytest_asyncio.fixture
+async def make_customer(db_session: AsyncSession):
+    """Factory: create a Customer under a given org_id."""
+    from app.models.customer import Customer
+
+    async def _make(*, org_id, full_name: str = "Test Customer") -> Customer:
+        phone = f"+1555{uuid.uuid4().int % 100000000:08d}"
+        customer = Customer(
+            org_id=org_id,
+            full_name=full_name,
+            phone_primary=phone,
+            customer_since=date(2020, 1, 1),
+            contract_type="RESIDENTIAL_OTC",
+            metadata_={"churn_tier": "LOW"},
+        )
+        db_session.add(customer)
+        await db_session.flush()
+        return customer
+
+    return _make
 
 
 @pytest.fixture
@@ -530,6 +628,9 @@ async def api_client(
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
+
+    # The webhook builds TenantService(tool_executor.db); give the mock a real session.
+    mock_tool_executor.db = db_session
 
     async def override_tool_executor():
         return mock_tool_executor

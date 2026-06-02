@@ -21,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import SEED_ORG_ID_STR
 from app.core.database import Base
 
 if TYPE_CHECKING:
@@ -62,6 +63,15 @@ class CallTranscript(Base):
     transcript_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.org_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=text(f"'{SEED_ORG_ID_STR}'"),
+    )
+    # call_id is a Vapi-generated UUID — globally unique by construction, so the
+    # unique constraint remains global (not tenant-scoped) by design.
     call_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.customer_id")

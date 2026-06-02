@@ -14,12 +14,14 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import SEED_ORG_ID_STR
 from app.core.database import Base
 
 if TYPE_CHECKING:
@@ -42,7 +44,10 @@ class Customer(Base):
             "contract_type IN ('ANNUAL_MAINTENANCE','RESIDENTIAL_OTC','COMMERCIAL_SLA')",
             name="ck_customers_contract_type",
         ),
+        # Tenant-scoped uniqueness: two orgs may legitimately share a phone/external_id.
+        UniqueConstraint("org_id", "external_id", name="uq_customers_org_external_id"),
         Index("idx_customers_phone", "phone_primary"),
+        Index("idx_customers_org_phone", "org_id", "phone_primary"),
         Index("idx_customers_status", "account_status"),
         Index(
             "idx_customers_churn_risk",
@@ -53,7 +58,14 @@ class Customer(Base):
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    external_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.org_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=text(f"'{SEED_ORG_ID_STR}'"),
+    )
+    external_id: Mapped[Optional[str]] = mapped_column(String(64))
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone_primary: Mapped[str] = mapped_column(String(20), nullable=False)
     phone_secondary: Mapped[Optional[str]] = mapped_column(String(20))

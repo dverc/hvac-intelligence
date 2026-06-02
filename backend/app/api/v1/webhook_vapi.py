@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -15,6 +16,8 @@ from app.core.metrics import vapi_webhook_total
 from app.core.rate_limit import limiter
 from app.core.database import get_session_factory
 from app.pipeline.event_bus import publish_call_active_event
+from app.schemas.organization import OrganizationSettings
+from app.services.tenant_service import TenantService
 from app.services.tool_executor import ToolExecutor
 from app.services.transcript_service import TranscriptService
 router = APIRouter(prefix="/webhook/vapi", tags=["vapi"])
@@ -85,11 +88,13 @@ def _extract_phone_from_call(message: dict[str, Any]) -> Optional[str]:
     return None
 
 
-async def _process_call_end_background(call_data: dict[str, Any]) -> None:
+async def _process_call_end_background(call_data: dict[str, Any], org_id: str) -> None:
     async with get_session_factory()() as session:
         try:
             service = TranscriptService(session)
-            result = await service.process_completed_call(call_data)
+            result = await service.process_completed_call(
+                call_data, uuid.UUID(org_id)
+            )
             await session.commit()
             if result:
                 cost_display = result["call_cost_usd"]
@@ -140,6 +145,20 @@ async def handle_vapi_webhook(
     logger.info("Vapi event: %s | call_id: %s", event_type, call_id)
     vapi_webhook_total.labels(event_type=event_type).inc()
 
+    # Resolve the tenant for THIS call (per-call, never assumed process-wide).
+    tenant_service = TenantService(tool_executor.db)
+    org_id = await tenant_service.resolve_org_for_call(str(call_id), message)
+    org = await tenant_service.get_tenant_by_id(org_id)
+    org_settings = OrganizationSettings.model_validate(org.settings or {}) if org else None
+    tool_executor.set_tenant(org_id, org_settings)
+    if org is not None:
+        logger.info(
+            "Tenant resolved: %s (org_id=%s) | call_id=%s",
+            org.org_name,
+            org_id,
+            call_id,
+        )
+
     if event_type == "tool-calls":
         tool_call_list = message.get("toolCallList", [])
         logger.info(
@@ -154,8 +173,12 @@ async def handle_vapi_webhook(
         phone = _extract_phone_from_call(message)
         if not phone:
             raise HTTPException(status_code=422, detail="Missing caller phone number")
+        if org is None:
+            raise HTTPException(status_code=500, detail="Tenant resolution failed")
 
-        enrichment = await tool_executor.customer_service.get_call_context(phone, call_id)
+        enrichment = await tool_executor.customer_service.get_call_context(
+            phone, call_id, org
+        )
         variable_values = enrichment["variable_values"]
         logger.info(
             "Call context for %s (call_id=%s): customer=%s, churn=%s",
@@ -165,10 +188,10 @@ async def handle_vapi_webhook(
             variable_values.get("churn_risk"),
         )
 
-        customer = await tool_executor.customer_service.lookup_by_phone(phone)
+        customer = await tool_executor.customer_service.lookup_by_phone(phone, org_id)
         if customer is not None:
             score = await tool_executor.churn_service.get_latest_score(
-                str(customer.customer_id)
+                str(customer.customer_id), org_id
             )
             if score.get("risk_tier") in ("HIGH", "CRITICAL"):
                 await publish_call_active_event(
@@ -180,20 +203,20 @@ async def handle_vapi_webhook(
                     intervention_triggered=True,
                 )
 
-        return JSONResponse(
-            {
-                "assistantOverrides": {
-                    "variableValues": variable_values,
-                    "model": {
-                        "systemPrompt": enrichment["system_prompt_injection"],
-                    },
-                }
-            }
-        )
+        assistant_overrides: dict[str, Any] = {
+            "variableValues": variable_values,
+            "model": {
+                "systemPrompt": enrichment["system_prompt_injection"],
+            },
+        }
+        if enrichment.get("first_message"):
+            assistant_overrides["firstMessage"] = enrichment["first_message"]
+
+        return JSONResponse({"assistantOverrides": assistant_overrides})
 
     if event_type in {"call-end", "call-ended", "end-of-call-report"}:
         background = BackgroundTasks()
-        background.add_task(_process_call_end_background, message)
+        background.add_task(_process_call_end_background, message, str(org_id))
         return JSONResponse({"status": "accepted"}, background=background)
 
     return JSONResponse({"status": "ok"})

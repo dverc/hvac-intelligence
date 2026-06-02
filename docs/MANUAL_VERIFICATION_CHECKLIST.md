@@ -2,6 +2,56 @@
 
 Complete these steps **after all coding phases are submitted**. Check items off as you go.
 
+---
+
+## Priority — Register new Vapi tools + new-customer onboarding call
+
+Do these in order (Enhancement Phase 4).
+
+### 1. Add the 4 new tools in Vapi dashboard
+
+The agent **cannot** call these until they are registered in Vapi.
+
+- [ ] Open [Vapi dashboard](https://dashboard.vapi.ai) → your assistant (**HVAC Inbound Receptionist**) → **Tools** → **Add** (Function) for each tool below
+- [ ] Copy the JSON for each tool from [`docs/vapi_tool_schemas.md`](vapi_tool_schemas.md):
+  - [ ] `create_customer`
+  - [ ] `update_customer`
+  - [ ] `create_equipment`
+  - [ ] `update_dispatch`
+- [ ] Restart backend/uvicorn after saving (so the tool handlers are loaded)
+
+### 2. Test call as a new customer (unknown phone number)
+
+- [ ] Call your Vapi inbound number from a phone **not** in the database  
+  (seed data uses `+1555…` and `+15552001…` ranges — use your real cell or any number you have not seeded)
+- [ ] During the call, confirm the **onboarding flow** kicks in (agent treats you as unknown, collects info, uses `create_customer`)
+- [ ] After the call ends, confirm a **new row** in `customers`
+
+**Run this to verify** (replace `+1XXXXXXXXXX` with the number you called from):
+
+```bash
+docker compose exec postgres psql -U hvac_user -d hvac_intel -c \
+  "SELECT customer_id, full_name, phone_primary, account_status, created_at
+   FROM customers
+   WHERE phone_primary = '+1XXXXXXXXXX'
+   ORDER BY created_at DESC;"
+```
+
+Or list the most recently created customers:
+
+```bash
+docker compose exec postgres psql -U hvac_user -d hvac_intel -c \
+  "SELECT customer_id, full_name, phone_primary, created_at
+   FROM customers
+   ORDER BY created_at DESC
+   LIMIT 5;"
+```
+
+- [ ] New customer row exists with the caller's phone and name from the call
+- [ ] Optional: open that customer in the dashboard → **Call History** shows the onboarding call
+
+---
+
 This covers:
 - **Tech Spec Phases 0–8** (original build in `HVAC_Intelligence_Project_Aero_TechSpec.md`)
 - **Enhancement Phases 1–4** (transcript persistence, Call History UI, auth, new voice tools)
@@ -74,7 +124,9 @@ These are **manual steps in the [Vapi dashboard](https://dashboard.vapi.ai)** an
 - [ ] `rag_knowledge_query`
 - [ ] `create_support_ticket`
 
-**Four new tools** (Enhancement Phase 4 — copy JSON from `docs/vapi_tool_schemas.md`):
+**Four new tools** (Enhancement Phase 4 — **required before live onboarding works**):
+
+Go to assistant → **Tools** → add each Function using JSON from `docs/vapi_tool_schemas.md`. The agent cannot invoke them until registered here.
 
 - [ ] `create_customer`
 - [ ] `update_customer`
@@ -281,17 +333,19 @@ Each tool's server URL must reach your backend webhook (Vapi routes tool calls t
 
 ## Part O — Enhancement Phase 4: New voice tools (create/update customer, equipment, dispatch)
 
-- [ ] Add the **4 new tool definitions** in Vapi dashboard (see Part B.2 and `docs/vapi_tool_schemas.md`)
+See **Priority** section at the top for the two-step flow (register tools → new-customer test call + SQL verify).
+
+- [ ] Add the **4 new tool definitions** in Vapi dashboard (see Part B.2 and `docs/vapi_tool_schemas.md`) — agent cannot call them until registered
 - [ ] **Restart uvicorn/backend** so tool registry picks up handlers
 - [ ] **Live E2E call — known customer** (e.g. seeded phone `+19493313190`):
   - [ ] Webhook events in logs — no 401, no unknown-tool errors
   - [ ] Agent speaks personalized greeting using `{{customer_name}}` / `{{equipment_info}}`
   - [ ] Transcript persisted on call end
   - [ ] Call visible on customer detail **Call History** tab
-- [ ] **Live E2E call — unknown caller** (different number not in CRM):
-  - [ ] Agent runs onboarding via `create_customer` (and optionally `create_equipment`, `schedule_dispatch`)
-  - [ ] New customer row in DB
-  - [ ] Transcript + call history reflect the new account
+- [ ] **Live E2E call — unknown caller / new customer** (number **not** in `customers` — see Priority section):
+  - [ ] Onboarding flow audible on the call (`create_customer` path)
+  - [ ] `SELECT … FROM customers WHERE phone_primary = '<your test number>'` returns a new row (or appears in `ORDER BY created_at DESC LIMIT 5`)
+  - [ ] Transcript + Call History reflect the new account
 - [ ] **Optional tool exercises on a live call:**
   - [ ] `update_customer` — caller corrects address or phone
   - [ ] `update_dispatch` — caller changes or cancels a booking

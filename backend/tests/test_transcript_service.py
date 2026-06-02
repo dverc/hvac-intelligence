@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 
+from app.core.constants import SEED_ORG_ID
 from app.models.call_transcript import CallTranscript
 from app.models.dispatch_job import DispatchJob
 from app.services.transcript_service import TranscriptService
@@ -38,7 +39,7 @@ async def test_process_completed_call_extracts_vapi_enrichment_fields(
     }
 
     with patch("app.services.transcript_service.publish_call_features", return_value=True):
-        result = await service.process_completed_call(payload)
+        result = await service.process_completed_call(payload, SEED_ORG_ID)
         await db_session.commit()
 
     assert result is not None
@@ -90,7 +91,7 @@ async def test_process_completed_call_links_recent_dispatch_job(
     }
 
     with patch("app.services.transcript_service.publish_call_features", return_value=True):
-        await service.process_completed_call(payload)
+        await service.process_completed_call(payload, SEED_ORG_ID)
         await db_session.commit()
 
     row = (

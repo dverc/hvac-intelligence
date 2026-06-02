@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.metrics import observe_tool_execution
 from app.rag.retriever import RAGRetriever
 from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
+from app.schemas.organization import OrganizationSettings
 from app.schemas.tools import (
     CreateCustomerArgs,
     CreateEquipmentArgs,
@@ -96,6 +97,15 @@ class ToolExecutor:
         self.churn_service = churn_service
         self.ticket_service = ticket_service
         self.rag_retriever = rag_retriever
+        # Tenant context — MUST be set (set_tenant) before any handler runs.
+        self.org_id: uuid.UUID | None = None
+        self.org_settings: OrganizationSettings | None = None
+
+    def set_tenant(
+        self, org_id: uuid.UUID, settings: OrganizationSettings | None = None
+    ) -> None:
+        self.org_id = org_id
+        self.org_settings = settings
 
     @property
     def db(self) -> AsyncSession:
@@ -114,11 +124,33 @@ class ToolExecutor:
             args,
         )
 
+        # FAIL CLOSED: never run a tenant-scoped write/read without a resolved org.
+        if self.org_id is None:
+            return {
+                "toolCallId": tool_call_id,
+                "result": json.dumps(
+                    {"error": "Tenant not resolved for this call; cannot execute tools."}
+                ),
+            }
+
         handler_name = TOOL_REGISTRY.get(tool_name)
         if not handler_name:
             return {
                 "toolCallId": tool_call_id,
                 "result": json.dumps({"error": f"Unknown tool: {tool_name}"}),
+            }
+
+        # Enforce per-org enabled_tools server-side (None = all tools enabled).
+        if (
+            self.org_settings is not None
+            and self.org_settings.enabled_tools is not None
+            and tool_name not in self.org_settings.enabled_tools
+        ):
+            return {
+                "toolCallId": tool_call_id,
+                "result": json.dumps(
+                    {"error": f"Tool '{tool_name}' is not enabled for this organization."}
+                ),
             }
 
         try:
@@ -144,6 +176,7 @@ class ToolExecutor:
             priority=parsed.priority,
             preferred_window=parsed.preferred_window,
             issue_description=parsed.issue_description,
+            org_id=self.org_id,
             equipment_id=parsed.equipment_id,
             access_instructions=parsed.access_instructions,
             churn_context=churn_ctx,
@@ -163,19 +196,26 @@ class ToolExecutor:
             )
 
         parsed = QueryChurnScoreArgs.model_validate(kwargs)
-        score = await self.churn_service.get_latest_score(parsed.customer_id)
+        score = await self.churn_service.get_latest_score(
+            parsed.customer_id, self.org_id
+        )
         return json.dumps(score)
 
     async def execute_get_customer_info(self, **kwargs: Any) -> str:
         parsed = GetCustomerInfoArgs.model_validate(kwargs)
         profile = await self.customer_service.get_customer_info(
-            parsed.lookup_method, parsed.lookup_value
+            parsed.lookup_method, parsed.lookup_value, self.org_id
         )
         return json.dumps(profile)
 
     async def execute_get_equipment_info(self, **kwargs: Any) -> str:
         parsed = GetEquipmentInfoArgs.model_validate(kwargs)
         cid = uuid.UUID(parsed.customer_id)
+
+        # Ownership check: the customer must belong to this org.
+        owner = await self.customer_service.get_by_id(cid, self.org_id)
+        if owner is None:
+            return json.dumps({"found": False, "equipment": []})
 
         if parsed.equipment_id:
             rows = await self.db.execute(
@@ -207,9 +247,13 @@ class ToolExecutor:
 
     async def execute_rag_query(self, **kwargs: Any) -> str:
         parsed = RagKnowledgeQueryArgs.model_validate(kwargs)
+        # Use the tenant's Pinecone namespace when the tool didn't specify one.
+        namespace = parsed.namespace
+        if namespace is None and self.org_settings is not None:
+            namespace = self.org_settings.pinecone_namespace
         chunks = await self.rag_retriever.retrieve(
             query=parsed.query,
-            namespace=parsed.namespace,
+            namespace=namespace,
             top_k=parsed.top_k,
             filter_model=parsed.equipment_model,
         )
@@ -235,8 +279,15 @@ class ToolExecutor:
             )
 
         parsed = CreateSupportTicketArgs.model_validate(kwargs)
+        # Ownership check: only create tickets for this org's customers.
+        owner = await self.customer_service.get_by_id(
+            uuid.UUID(parsed.customer_id), self.org_id
+        )
+        if owner is None:
+            return json.dumps({"error": f"Customer {parsed.customer_id} not found"})
         ticket = await self.ticket_service.create_ticket(
             customer_id=uuid.UUID(parsed.customer_id),
+            org_id=self.org_id,
             ticket_type=parsed.ticket_type,
             subject=parsed.subject,
             description=parsed.description,
@@ -247,7 +298,7 @@ class ToolExecutor:
 
     async def execute_create_customer(self, **kwargs: Any) -> str:
         parsed = CreateCustomerArgs.model_validate(kwargs)
-        result = await self.customer_service.create_customer(parsed)
+        result = await self.customer_service.create_customer(parsed, self.org_id)
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "Failed to create customer")})
         return json.dumps(
@@ -300,6 +351,7 @@ class ToolExecutor:
         customer = await self.customer_service.update_customer(
             uuid.UUID(parsed.customer_id),
             update_payload,
+            self.org_id,
         )
         if customer is None:
             return json.dumps({"error": f"Customer {parsed.customer_id} not found"})
@@ -316,7 +368,7 @@ class ToolExecutor:
     async def execute_create_equipment(self, **kwargs: Any) -> str:
         parsed = CreateEquipmentArgs.model_validate(kwargs)
         equipment_service = EquipmentService(self.db)
-        result = await equipment_service.create_equipment(parsed)
+        result = await equipment_service.create_equipment(parsed, self.org_id)
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "Failed to create equipment")})
         return json.dumps(
@@ -332,7 +384,7 @@ class ToolExecutor:
 
     async def execute_update_dispatch(self, **kwargs: Any) -> str:
         parsed = UpdateDispatchArgs.model_validate(kwargs)
-        result = await self.dispatch_service.update_job(parsed)
+        result = await self.dispatch_service.update_job(parsed, self.org_id)
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "Failed to update dispatch")})
         return json.dumps(

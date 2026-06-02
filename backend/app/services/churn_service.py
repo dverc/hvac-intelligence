@@ -36,11 +36,12 @@ class ChurnService:
         self.db = db
 
     async def get_latest_score_row(
-        self, customer_id: uuid.UUID
+        self, customer_id: uuid.UUID, org_id: uuid.UUID
     ) -> Optional[ChurnScore]:
         stmt = (
             select(ChurnScore)
             .where(
+                ChurnScore.org_id == org_id,
                 ChurnScore.entity_type == "CUSTOMER",
                 ChurnScore.entity_id == customer_id,
             )
@@ -50,9 +51,11 @@ class ChurnService:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_latest_score(self, customer_id: str) -> dict[str, Any]:
+    async def get_latest_score(
+        self, customer_id: str, org_id: uuid.UUID
+    ) -> dict[str, Any]:
         cid = uuid.UUID(customer_id)
-        row = await self.get_latest_score_row(cid)
+        row = await self.get_latest_score_row(cid, org_id)
 
         if row is not None:
             age_minutes = int(
@@ -71,8 +74,9 @@ class ChurnService:
                 "source": "churn_scores",
             }
 
+        # Ownership check: fall back to customer metadata only within the org.
         customer = await self.db.get(Customer, cid)
-        if customer is None:
+        if customer is None or customer.org_id != org_id:
             raise ValueError(f"Customer {customer_id} not found")
 
         meta = customer.metadata_ or {}

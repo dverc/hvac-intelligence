@@ -17,6 +17,7 @@ from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
 from app.models.feature_store import FeatureStore
+from app.models.technician import Technician
 from app.pipeline.celery_app import celery_app
 from app.core.metrics import saved_by_ai_counter
 from app.pipeline.event_bus import (
@@ -97,6 +98,18 @@ def process_call_features(self, feature_payload: dict[str, Any]) -> dict[str, An
         session.close()
 
 
+def _resolve_entity_org_id(session, entity_type: str, entity_id: uuid.UUID):
+    """Derive the owning org for a scored entity so scoring rows are tenant-correct.
+
+    Falls back to the column server_default (seed org) only if the entity is gone.
+    """
+    if entity_type == "EMPLOYEE":
+        tech = session.get(Technician, entity_id)
+        return tech.org_id if tech is not None else None
+    customer = session.get(Customer, entity_id)
+    return customer.org_id if customer is not None else None
+
+
 def _upsert_feature_store(
     session,
     meta: dict[str, Any],
@@ -134,6 +147,10 @@ def _upsert_feature_store(
         window_end=window_end,
         window_days=window_days,
     )
+    if existing is None:
+        org_id = _resolve_entity_org_id(session, entity_type, entity_id)
+        if org_id is not None:
+            record.org_id = org_id
 
     _apply_feature_columns(record, features)
     record.feature_vector = [float(model_input.get(key, 0.0)) for key in FEATURE_ORDER[:64]]
@@ -196,18 +213,22 @@ def _persist_churn_score(
     prediction: dict[str, Any],
     trigger: str,
 ) -> None:
-    session.add(
-        ChurnScore(
-            entity_type=meta["entity_type"],
-            entity_id=uuid.UUID(meta["entity_id"]),
-            churn_probability=Decimal(str(prediction["churn_probability"])),
-            risk_tier=prediction["risk_tier"],
-            feature_contributions=prediction.get("feature_contributions"),
-            model_version=prediction.get("model_version"),
-            scoring_trigger=trigger,
-            intervention_applied=trigger == "CALL_COMPLETED",
-        )
+    entity_type = meta["entity_type"]
+    entity_id = uuid.UUID(meta["entity_id"])
+    org_id = _resolve_entity_org_id(session, entity_type, entity_id)
+    score = ChurnScore(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        churn_probability=Decimal(str(prediction["churn_probability"])),
+        risk_tier=prediction["risk_tier"],
+        feature_contributions=prediction.get("feature_contributions"),
+        model_version=prediction.get("model_version"),
+        scoring_trigger=trigger,
+        intervention_applied=trigger == "CALL_COMPLETED",
     )
+    if org_id is not None:
+        score.org_id = org_id
+    session.add(score)
 
 
 def _update_call_transcript_scores(

@@ -10,15 +10,19 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import SEED_ORG_ID_STR
 from app.core.database import Base
 
 if TYPE_CHECKING:
@@ -33,10 +37,18 @@ class Equipment(Base):
             "equipment_type IN ('AC_UNIT','FURNACE','HEAT_PUMP','AIR_HANDLER','MINI_SPLIT','OTHER')",
             name="ck_equipment_equipment_type",
         ),
+        UniqueConstraint("org_id", "serial_number", name="uq_equipment_org_serial_number"),
     )
 
     equipment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.org_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+        server_default=text(f"'{SEED_ORG_ID_STR}'"),
     )
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -45,7 +57,7 @@ class Equipment(Base):
     )
     make: Mapped[str] = mapped_column(String(100), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
-    serial_number: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
+    serial_number: Mapped[Optional[str]] = mapped_column(String(100))
     equipment_type: Mapped[Optional[str]] = mapped_column(String(50))
     install_date: Mapped[Optional[date]] = mapped_column(Date)
     warranty_expiry: Mapped[Optional[date]] = mapped_column(Date)

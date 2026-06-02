@@ -3,7 +3,7 @@ import { Inter } from "next/font/google";
 
 import { DashboardNav } from "@/components/DashboardNav";
 
-import { getApiKeyConfigError } from "@/lib/config";
+import { getApiKeyConfigError, getOrgName } from "@/lib/config";
 
 import "./globals.css";
 
@@ -20,6 +20,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   const apiKeyError = getApiKeyConfigError();
+  const orgName = getOrgName();
 
   return (
     <html lang="en">
@@ -30,7 +31,7 @@ export default function RootLayout({
           </aside>
           <main className="flex-1 overflow-auto">
             <div className="border-b border-gray-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950 md:hidden">
-              <p className="font-bold text-indigo-600 dark:text-indigo-400">HVAC Intelligence</p>
+              <p className="font-bold text-indigo-600 dark:text-indigo-400">{orgName}</p>
             </div>
             <div className="mx-auto max-w-7xl p-4 md:p-8">
               {apiKeyError ? (

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from app.api.deps import get_analytics_service, get_churn_service
+from app.core.tenant import get_dashboard_org_id
 from app.models.churn_score import ChurnScore
 from app.schemas.analytics import CohortHeatmapResponse
 from app.services.analytics_service import AnalyticsService
@@ -20,8 +21,12 @@ async def list_churn_scores(
     risk_tier: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     churn_service: ChurnService = Depends(get_churn_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> dict:
-    stmt = select(ChurnScore).where(ChurnScore.entity_type == entity_type)
+    stmt = select(ChurnScore).where(
+        ChurnScore.org_id == org_id,
+        ChurnScore.entity_type == entity_type,
+    )
     if risk_tier:
         stmt = stmt.where(ChurnScore.risk_tier == risk_tier.upper())
     stmt = stmt.order_by(ChurnScore.score_timestamp.desc()).limit(limit)
@@ -46,6 +51,7 @@ async def churn_score_history(
     entity_id: uuid.UUID,
     days: int = Query(default=90, ge=1, le=365),
     churn_service: ChurnService = Depends(get_churn_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> dict:
     from datetime import datetime, timedelta, timezone
 
@@ -54,6 +60,7 @@ async def churn_score_history(
         await churn_service.db.execute(
             select(ChurnScore)
             .where(
+                ChurnScore.org_id == org_id,
                 ChurnScore.entity_id == entity_id,
                 ChurnScore.score_timestamp >= since,
             )
@@ -78,9 +85,10 @@ async def churn_score_history(
 async def trigger_churn_score(
     entity_id: uuid.UUID,
     churn_service: ChurnService = Depends(get_churn_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> dict:
     try:
-        score = await churn_service.get_latest_score(str(entity_id))
+        score = await churn_service.get_latest_score(str(entity_id), org_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "queued", "entity_id": str(entity_id), "latest_snapshot": score}
