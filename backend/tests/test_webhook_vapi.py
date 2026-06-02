@@ -169,3 +169,23 @@ async def test_call_end_triggers_background_transcript(api_client):
         assert response.status_code == 200
         assert response.json()["status"] == "accepted"
         mock_bg.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_end_of_call_report_triggers_background_transcript(api_client):
+    with patch("app.api.v1.webhook_vapi._process_call_end_background") as mock_bg:
+        payload = {
+            "message": {
+                "type": "end-of-call-report",
+                "call": {"id": "call-eocr-1", "customer": {"number": "+15552001002"}},
+            }
+        }
+        body, signature = sign_vapi_payload(payload)
+        response = await api_client.post(
+            "/webhook/vapi",
+            content=body,
+            headers={"x-vapi-signature": signature, "content-type": "application/json"},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "accepted"
+        mock_bg.assert_called_once()

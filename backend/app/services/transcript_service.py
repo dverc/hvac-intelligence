@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.call_transcript import CallTranscript
+from app.models.dispatch_job import DispatchJob
 from app.pipeline.feature_extractor import FeatureExtractor
 from app.pipeline.kafka_producer import publish_call_features
 from app.services.churn_service import ChurnService
@@ -25,17 +26,17 @@ class TranscriptService:
         self._churn = ChurnService(db)
         self._feature_extractor = FeatureExtractor()
 
-    async def process_completed_call(self, call_data: dict[str, Any]) -> None:
+    async def process_completed_call(self, call_data: dict[str, Any]) -> Optional[dict[str, Any]]:
         call = call_data.get("call", call_data)
         call_id = call.get("id") or call_data.get("call_id")
         if not call_id:
-            return
+            return None
 
         existing = await self.db.execute(
             select(CallTranscript).where(CallTranscript.call_id == call_id)
         )
         if existing.scalar_one_or_none() is not None:
-            return
+            return None
 
         phone = _extract_phone(call)
         customer_id: Optional[uuid.UUID] = None
@@ -62,18 +63,29 @@ class TranscriptService:
         if churn_start is not None and churn_end is not None:
             intervention = (churn_start - churn_end) >= 0.15
 
-        call_outcome = call_data.get("endedReason") or call.get("outcome") or "RETAINED"
+        enrichment = _extract_vapi_enrichment(call_data, call)
+        call_outcome = call.get("outcome") or call_data.get("outcome") or "RETAINED"
         vapi_meta = dict(call_data.get("vapi_metadata") or call.get("metadata") or {})
         vapi_meta["raw_type"] = call_data.get("type")
+        if enrichment["cost_breakdown"] is not None:
+            vapi_meta["cost_breakdown"] = enrichment["cost_breakdown"]
+
+        dispatch_job_id = await self._find_recent_dispatch_job(customer_id, started)
 
         record = CallTranscript(
             call_id=call_id,
             customer_id=customer_id,
+            dispatch_job_id=dispatch_job_id,
             call_direction="INBOUND",
             call_start_utc=started,
             call_end_utc=ended,
             duration_seconds=duration_seconds,
             call_outcome=call_outcome,
+            recording_url=enrichment["recording_url"],
+            call_summary=enrichment["call_summary"],
+            vapi_end_reason=enrichment["vapi_end_reason"],
+            call_cost_usd=enrichment["call_cost_usd"],
+            vapi_assistant_id=enrichment["vapi_assistant_id"],
             transcript_raw=transcript_text,
             transcript_json=transcript_json,
             churn_risk_at_call_start=churn_start,
@@ -129,10 +141,34 @@ class TranscriptService:
                 from app.pipeline.tasks import process_call_features
 
                 process_call_features.delay(payload)
-            return
+            return _persistence_summary(record)
 
         self.db.add(record)
         await self.db.flush()
+        return _persistence_summary(record)
+
+    async def _find_recent_dispatch_job(
+        self,
+        customer_id: Optional[uuid.UUID],
+        call_start_utc: datetime,
+    ) -> Optional[uuid.UUID]:
+        if customer_id is None:
+            return None
+
+        window_start = call_start_utc - timedelta(hours=2)
+        window_end = call_start_utc + timedelta(hours=2)
+        result = await self.db.execute(
+            select(DispatchJob)
+            .where(
+                DispatchJob.customer_id == customer_id,
+                DispatchJob.created_at >= window_start,
+                DispatchJob.created_at <= window_end,
+            )
+            .order_by(DispatchJob.created_at.desc())
+            .limit(1)
+        )
+        job = result.scalar_one_or_none()
+        return job.job_id if job else None
 
     def _extract_call_features(
         self,
@@ -147,6 +183,63 @@ class TranscriptService:
             transcript_json=transcript_json,
             call_metadata=call_metadata,
         )
+
+
+def _extract_vapi_enrichment(
+    call_data: dict[str, Any], call: dict[str, Any]
+) -> dict[str, Any]:
+    recording_url = (
+        call_data.get("recordingUrl")
+        or call_data.get("recording_url")
+        or call.get("recordingUrl")
+        or call.get("recording_url")
+    )
+    call_summary = call_data.get("summary") or call.get("summary")
+    vapi_end_reason = (
+        call_data.get("endedReason")
+        or call_data.get("ended_reason")
+        or call.get("endedReason")
+        or call.get("ended_reason")
+    )
+    raw_cost = call_data.get("cost") if call_data.get("cost") is not None else call.get("cost")
+    call_cost_usd: Optional[Decimal] = None
+    if raw_cost is not None:
+        call_cost_usd = Decimal(str(raw_cost))
+
+    cost_breakdown = (
+        call_data.get("costBreakdown")
+        or call_data.get("cost_breakdown")
+        or call.get("costBreakdown")
+        or call.get("cost_breakdown")
+    )
+    if cost_breakdown is not None and not isinstance(cost_breakdown, dict):
+        cost_breakdown = None
+
+    vapi_assistant_id = (
+        call_data.get("assistantId")
+        or call_data.get("assistant_id")
+        or call.get("assistantId")
+        or call.get("assistant_id")
+    )
+
+    return {
+        "recording_url": str(recording_url) if recording_url else None,
+        "call_summary": str(call_summary) if call_summary else None,
+        "vapi_end_reason": str(vapi_end_reason) if vapi_end_reason else None,
+        "call_cost_usd": call_cost_usd,
+        "cost_breakdown": cost_breakdown,
+        "vapi_assistant_id": str(vapi_assistant_id) if vapi_assistant_id else None,
+    }
+
+
+def _persistence_summary(record: CallTranscript) -> dict[str, Any]:
+    cost = record.call_cost_usd
+    return {
+        "call_id": record.call_id,
+        "customer_id": str(record.customer_id) if record.customer_id else None,
+        "duration_seconds": record.duration_seconds,
+        "call_cost_usd": float(cost) if cost is not None else None,
+    }
 
 
 def _extract_phone(call: dict[str, Any]) -> Optional[str]:

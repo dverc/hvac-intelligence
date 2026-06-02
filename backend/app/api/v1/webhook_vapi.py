@@ -87,8 +87,21 @@ async def _process_call_end_background(call_data: dict[str, Any]) -> None:
     async with get_session_factory()() as session:
         try:
             service = TranscriptService(session)
-            await service.process_completed_call(call_data)
+            result = await service.process_completed_call(call_data)
             await session.commit()
+            if result:
+                cost_display = result["call_cost_usd"]
+                if cost_display is None:
+                    cost_str = "N/A"
+                else:
+                    cost_str = f"{cost_display:.4f}"
+                logger.info(
+                    "Transcript persisted | call_id=%s | customer_id=%s | duration=%ss | cost=$%s",
+                    result["call_id"],
+                    result.get("customer_id"),
+                    result.get("duration_seconds"),
+                    cost_str,
+                )
         except Exception:
             await session.rollback()
             logger.exception("Failed to process completed call in background")
@@ -176,7 +189,7 @@ async def handle_vapi_webhook(
             }
         )
 
-    if event_type in {"call-end", "call-ended"}:
+    if event_type in {"call-end", "call-ended", "end-of-call-report"}:
         background_tasks.add_task(_process_call_end_background, message)
         return JSONResponse({"status": "accepted"})
 
