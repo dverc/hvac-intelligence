@@ -103,6 +103,77 @@ async function apiPatch<T>(path: string, payload: CustomerUpdatePayload): Promis
   return response.json() as Promise<T>;
 }
 
+async function apiPatchJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "PATCH",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...apiKeyHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, `PATCH ${path} failed: ${body}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+async function apiDelete<T>(path: string): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "DELETE",
+    cache: "no-store",
+    headers: { Accept: "application/json", ...apiKeyHeaders() },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, `DELETE ${path} failed: ${body}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+async function apiPostJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...apiKeyHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, `POST ${path} failed: ${body}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { Accept: "application/json", ...apiKeyHeaders() },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, `POST ${path} failed: ${body}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 // ── Churn ─────────────────────────────────────────────────────────────────────
 
 export function listChurnScores(params?: {
@@ -207,6 +278,90 @@ export function getFeatureImportance(modelVersion = "latest") {
   return apiGet<FeatureImportanceResponse>("/api/v1/analytics/feature-importance", {
     model_version: modelVersion,
   });
+}
+
+// ── Knowledge base ────────────────────────────────────────────────────────────
+
+export interface KnowledgeDocument {
+  doc_id: string;
+  document_id: string;
+  filename: string;
+  namespace: string;
+  chunk_count: number;
+  file_size_bytes?: number;
+  mime_type?: string;
+  uploaded_at: string;
+  last_indexed_at: string;
+}
+
+export interface KnowledgeDocumentsResponse {
+  org_id: string;
+  total: number;
+  items: KnowledgeDocument[];
+}
+
+export interface ServiceCatalogItem {
+  service_id: string;
+  org_id: string;
+  service_code: string;
+  service_name: string;
+  category: string;
+  description?: string;
+  base_price_usd?: number | string;
+  price_max_usd?: number | string;
+  price_notes?: string;
+  duration_minutes_min?: number;
+  duration_minutes_max?: number;
+  is_active: boolean;
+  requires_equipment_type?: string;
+  emergency_surcharge_pct?: number | string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceCatalogResponse {
+  org_id: string;
+  total: number;
+  items: ServiceCatalogItem[];
+}
+
+export function getKnowledgeDocuments(orgId: string) {
+  return apiGet<KnowledgeDocumentsResponse>(`/api/v1/knowledge/${orgId}/documents`);
+}
+
+export function uploadKnowledgeDocument(orgId: string, formData: FormData) {
+  return apiPostForm<{ document_id: string; chunks_indexed: number; namespace: string }>(
+    `/api/v1/knowledge/${orgId}/documents`,
+    formData,
+  );
+}
+
+export function deleteKnowledgeDocument(orgId: string, documentId: string) {
+  return apiDelete<{ deleted: boolean; document_id: string }>(
+    `/api/v1/knowledge/${orgId}/documents/${documentId}`,
+  );
+}
+
+export function getServiceCatalog(orgId: string) {
+  return apiGet<ServiceCatalogResponse>(`/api/v1/knowledge/${orgId}/service-catalog`);
+}
+
+export function createServiceItem(orgId: string, data: Record<string, unknown>) {
+  return apiPostJson<ServiceCatalogItem>(
+    `/api/v1/knowledge/${orgId}/service-catalog`,
+    data,
+  );
+}
+
+export function updateServiceItem(
+  orgId: string,
+  serviceId: string,
+  data: Record<string, unknown>,
+) {
+  return apiPatchJson<ServiceCatalogItem>(
+    `/api/v1/knowledge/${orgId}/service-catalog/${serviceId}`,
+    data,
+  );
 }
 
 // ── SSE (dashboard real-time) ───────────────────────────────────────────────

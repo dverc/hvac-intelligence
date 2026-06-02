@@ -103,3 +103,23 @@ class LocalMockVectorStore:
         if namespace is None:
             return len(self._records)
         return sum(1 for r in self._records if r["namespace"] == namespace)
+
+    def count_by_namespaces(self, namespaces: list[str]) -> dict[str, int]:
+        counts = {ns: 0 for ns in namespaces}
+        for record in self._records:
+            ns = record.get("namespace")
+            if ns in counts:
+                counts[ns] += 1
+        return counts
+
+    def delete_by_id_prefix(self, namespace: str, prefix: str) -> int:
+        before = len(self._records)
+        self._records = [
+            r
+            for r in self._records
+            if not (r["namespace"] == namespace and r["id"].startswith(prefix))
+        ]
+        deleted = before - len(self._records)
+        if deleted:
+            self.save()
+        return deleted

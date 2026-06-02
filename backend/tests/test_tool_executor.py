@@ -345,3 +345,47 @@ async def test_update_dispatch_cancel_sets_status_cancelled(
 
     job = await db_session.get(DispatchJob, uuid.UUID(job_id))
     assert job.job_status == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_lookup_service_info_by_service_code(tool_executor, db_session):
+    from app.schemas.service_catalog import ServiceCatalogCreate
+    from app.services.service_catalog_service import ServiceCatalogService
+
+    catalog = ServiceCatalogService(db_session)
+    await catalog.create(
+        tool_executor.org_id,
+        ServiceCatalogCreate(
+            service_code="TOOL_LOOKUP",
+            service_name="Tool Lookup Test",
+            category="diagnostic",
+            base_price_usd=89,
+            price_max_usd=129,
+            duration_minutes_min=45,
+            duration_minutes_max=60,
+        ),
+    )
+    await db_session.commit()
+
+    result = json.loads(
+        await tool_executor.execute_lookup_service_info(service_code="TOOL_LOOKUP")
+    )
+    assert result["services_found"] == 1
+    assert result["results"][0]["price_range"] == "$89 - $129"
+
+
+@pytest.mark.asyncio
+async def test_lookup_service_info_no_results_helpful_message(tool_executor):
+    result = json.loads(
+        await tool_executor.execute_lookup_service_info(
+            service_code="NONEXISTENT_SERVICE_XYZ"
+        )
+    )
+    assert result["services_found"] == 0
+    assert "technician" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_lookup_service_info_validation_error_without_args(tool_executor):
+    result = json.loads(await tool_executor.execute_lookup_service_info())
+    assert "error" in result

@@ -5,6 +5,7 @@ from app.api.v1 import (
     calls,
     churn,
     customers,
+    knowledge,
     organizations,
     stream,
     webhook_vapi,
@@ -16,8 +17,7 @@ api_router.include_router(organizations.router)
 api_router.include_router(calls.router)
 api_router.include_router(customers.router)
 api_router.include_router(churn.router)
-# TENANT-TODO: analytics aggregation SQL is not yet org-filtered; the dependency
-# below scopes the request to a valid org as a stopgap (single-tenant dev today).
+api_router.include_router(knowledge.router)
 api_router.include_router(
     analytics.router, dependencies=[Depends(get_dashboard_org_id)]
 )

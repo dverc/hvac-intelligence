@@ -14,9 +14,11 @@ from app.models import (  # noqa: F401
     ChurnScore,
     Customer,
     DispatchJob,
+    DocumentRegistry,
     Equipment,
     FeatureStore,
     Organization,
+    ServiceCatalog,
     SupportTicket,
     Technician,
 )

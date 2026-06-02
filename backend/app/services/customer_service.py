@@ -28,6 +28,13 @@ _ADDRESS_FIELD_MAP = {
     "zip": "zip",
 }
 
+_SERVICE_PRICING_PROMPT = (
+    "\nSERVICE & PRICING GUIDANCE:\n"
+    "For exact pricing questions, use lookup_service_info first.\n"
+    "For detailed explanations of what a service includes or warranty/policy "
+    "questions, use rag_knowledge_query with namespace='pricing'."
+)
+
 
 def _build_business_context(
     org: Organization, settings: OrganizationSettings
@@ -351,6 +358,7 @@ class CustomerService:
                 "schedule_dispatch.\n"
                 "Option 2 — They may have an account under a different number: ask for "
                 "their other number or email and call get_customer_info."
+                f"{_SERVICE_PRICING_PROMPT}"
             )
             return {
                 "variable_values": {
@@ -418,6 +426,7 @@ class CustomerService:
             "their provided phone number or email.\n"
             "If they want to create a new account: call create_customer with their details.\n"
             "Use tools to schedule dispatch, query churn, and pull equipment details as needed."
+            f"{_SERVICE_PRICING_PROMPT}"
         )
 
         return {

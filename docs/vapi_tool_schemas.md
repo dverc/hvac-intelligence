@@ -237,6 +237,39 @@ Correct or cancel a dispatch booking created during the call.
 
 ---
 
+## lookup_service_info
+
+Look up exact service pricing, duration, and descriptions from the tenant service catalog.
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "lookup_service_info",
+    "description": "Look up HVAC service pricing, duration, and descriptions from the service catalog. Use for exact price questions (e.g. 'how much does AC diagnostic cost?'). For nuanced policy or 'what's included' questions, use rag_knowledge_query with namespace pricing instead.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Natural language search, e.g. 'how much does AC repair cost'."
+        },
+        "category": {
+          "type": "string",
+          "description": "Filter by category: diagnostic, repair, maintenance, installation, emergency, or inspection."
+        },
+        "service_code": {
+          "type": "string",
+          "description": "Exact machine-readable service code, e.g. AC_DIAGNOSTIC."
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Identity confirmation (system prompt — no tool)
 
 On **call-start**, the backend injects identity confirmation instructions when a phone match is found. No dashboard change required — ensure the assistant system prompt allows following injected context from `assistantOverrides.model.systemPrompt`.

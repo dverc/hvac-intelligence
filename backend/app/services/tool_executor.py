@@ -20,6 +20,7 @@ from app.schemas.tools import (
     CreateSupportTicketArgs,
     GetCustomerInfoArgs,
     GetEquipmentInfoArgs,
+    LookupServiceInfoArgs,
     QueryChurnScoreArgs,
     RagKnowledgeQueryArgs,
     ScheduleDispatchArgs,
@@ -30,6 +31,11 @@ from app.services.churn_service import ChurnService
 from app.services.customer_service import CustomerService
 from app.services.dispatch_service import DispatchService
 from app.services.equipment_service import EquipmentService
+from app.services.service_catalog_service import (
+    ServiceCatalogService,
+    format_duration,
+    format_price_range,
+)
 from app.services.ticket_service import TicketService
 
 logger = logging.getLogger(__name__)
@@ -45,6 +51,7 @@ TOOL_REGISTRY: dict[str, str] = {
     "update_customer": "execute_update_customer",
     "create_equipment": "execute_create_equipment",
     "update_dispatch": "execute_update_dispatch",
+    "lookup_service_info": "execute_lookup_service_info",
 }
 
 
@@ -91,12 +98,16 @@ class ToolExecutor:
         churn_service: ChurnService,
         ticket_service: TicketService,
         rag_retriever: RAGRetriever,
+        service_catalog_service: ServiceCatalogService | None = None,
     ) -> None:
         self.customer_service = customer_service
         self.dispatch_service = dispatch_service
         self.churn_service = churn_service
         self.ticket_service = ticket_service
         self.rag_retriever = rag_retriever
+        self.service_catalog_service = service_catalog_service or ServiceCatalogService(
+            customer_service.db
+        )
         # Tenant context — MUST be set (set_tenant) before any handler runs.
         self.org_id: uuid.UUID | None = None
         self.org_settings: OrganizationSettings | None = None
@@ -247,8 +258,7 @@ class ToolExecutor:
 
     async def execute_rag_query(self, **kwargs: Any) -> str:
         parsed = RagKnowledgeQueryArgs.model_validate(kwargs)
-        # Use the tenant's Pinecone namespace when the tool didn't specify one.
-        namespace = parsed.namespace
+        namespace = parsed.namespace_override or parsed.namespace
         if namespace is None and self.org_settings is not None:
             namespace = self.org_settings.pinecone_namespace
         chunks = await self.rag_retriever.retrieve(
@@ -258,6 +268,57 @@ class ToolExecutor:
             filter_model=parsed.equipment_model,
         )
         return json.dumps({"retrieved_context": chunks})
+
+    async def execute_lookup_service_info(self, **kwargs: Any) -> str:
+        try:
+            parsed = LookupServiceInfoArgs.model_validate(kwargs)
+        except Exception as exc:
+            return json.dumps(
+                {
+                    "error": (
+                        "Provide at least one of query, category, or service_code. "
+                        f"Details: {exc}"
+                    )
+                }
+            )
+
+        results = await self.service_catalog_service.lookup(
+            org_id=self.org_id,
+            query=parsed.query,
+            category=parsed.category,
+            service_code=parsed.service_code,
+        )
+        if not results:
+            return json.dumps(
+                {
+                    "services_found": 0,
+                    "results": [],
+                    "message": (
+                        "I couldn't find any services matching that request. "
+                        "Try asking about a different service, or speak with a "
+                        "technician for a custom quote."
+                    ),
+                }
+            )
+
+        formatted = [
+            {
+                "service_name": item.service_name,
+                "price_range": format_price_range(item),
+                "duration": format_duration(item),
+                "description": item.description or "",
+                "notes": item.price_notes or "",
+            }
+            for item in results
+        ]
+        count = len(formatted)
+        return json.dumps(
+            {
+                "services_found": count,
+                "results": formatted,
+                "message": f"I found {count} service{'s' if count != 1 else ''} matching your question.",
+            }
+        )
 
     async def execute_create_ticket(self, **kwargs: Any) -> str:
         required_fields = (

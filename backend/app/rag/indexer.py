@@ -56,7 +56,11 @@ class KnowledgeIndexer:
         raw = f"{chunk.namespace}:{chunk.source}:{chunk.chunk_index}:{chunk.text[:64]}"
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
-    async def index_chunks(self, chunks: list[DocumentChunk]) -> int:
+    async def index_chunks(
+        self,
+        chunks: list[DocumentChunk],
+        chunk_ids: list[str] | None = None,
+    ) -> int:
         if not chunks:
             return 0
 
@@ -66,7 +70,9 @@ class KnowledgeIndexer:
 
         texts = [c.text for c in chunks]
         vectors = await self._embedder.embed_texts(texts)
-        ids = [self._chunk_id(c) for c in chunks]
+        if chunk_ids is not None and len(chunk_ids) != len(chunks):
+            raise ValueError("chunk_ids length must match chunks length")
+        ids = chunk_ids if chunk_ids is not None else [self._chunk_id(c) for c in chunks]
         metadatas: list[dict[str, Any]] = [
             {
                 "text": c.text,
@@ -91,6 +97,56 @@ class KnowledgeIndexer:
             namespace=namespace,
         )
         return len(chunks)
+
+    async def delete_by_id_prefix(self, namespace: str, prefix: str) -> int:
+        if namespace not in RAG_NAMESPACES:
+            raise ValueError(f"Invalid namespace: {namespace}")
+        if self._use_mock:
+            assert self._mock_store is not None
+            return self._mock_store.delete_by_id_prefix(namespace, prefix)
+
+        assert self._pinecone_index is not None
+        # Pinecone serverless: list + delete by prefix when available; fallback no-op count.
+        try:
+            deleted = 0
+            for ids_batch in self._list_ids_by_prefix(namespace, prefix):
+                if ids_batch:
+                    self._pinecone_index.delete(ids=ids_batch, namespace=namespace)
+                    deleted += len(ids_batch)
+            return deleted
+        except Exception as exc:
+            logger.warning("Pinecone prefix delete failed: %s", exc)
+            return 0
+
+    def _list_ids_by_prefix(self, namespace: str, prefix: str):
+        """Yield ID batches matching prefix (Pinecone list API)."""
+        assert self._pinecone_index is not None
+        pagination_token = None
+        while True:
+            kwargs: dict[str, Any] = {"namespace": namespace, "prefix": prefix}
+            if pagination_token:
+                kwargs["pagination_token"] = pagination_token
+            response = self._pinecone_index.list_paginated(**kwargs)
+            ids = [item.id for item in (response.vectors or []) if item.id.startswith(prefix)]
+            if ids:
+                yield ids
+            pagination_token = getattr(response, "pagination", None)
+            if pagination_token is None or not getattr(pagination_token, "next", None):
+                break
+            pagination_token = pagination_token.next
+
+    def get_namespace_counts(self) -> dict[str, int]:
+        if self._use_mock:
+            assert self._mock_store is not None
+            return self._mock_store.count_by_namespaces(sorted(RAG_NAMESPACES))
+        assert self._pinecone_index is not None
+        stats = self._pinecone_index.describe_index_stats()
+        ns_stats = getattr(stats, "namespaces", None) or {}
+        return {
+            ns: int(getattr(info, "vector_count", 0) or info.get("vector_count", 0))
+            for ns, info in ns_stats.items()
+            if ns in RAG_NAMESPACES
+        }
 
     async def index_directory(
         self,

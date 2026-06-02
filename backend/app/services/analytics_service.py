@@ -33,6 +33,7 @@ from app.schemas.analytics import (
     WeekOverWeekDelta,
 )
 from app.core.metrics import high_risk_accounts_gauge
+from app.core.tenant import scoped
 from app.services.churn_service import TIER_DEFAULT_PROBABILITY
 
 RISK_TIERS = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
@@ -42,9 +43,11 @@ class AnalyticsService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def get_churn_probability_distribution(self) -> ChurnDistributionResponse:
+    async def get_churn_probability_distribution(
+        self, org_id: uuid.UUID
+    ) -> ChurnDistributionResponse:
         as_of = datetime.now(timezone.utc)
-        snapshots = await self._latest_customer_snapshots(as_of)
+        snapshots = await self._latest_customer_snapshots(org_id, as_of)
         total = len(snapshots)
 
         cohort_stats: dict[str, dict[str, Any]] = {
@@ -78,7 +81,7 @@ class AnalyticsService:
             )
 
         week_ago = as_of - timedelta(days=7)
-        prior_snapshots = await self._latest_customer_snapshots(week_ago)
+        prior_snapshots = await self._latest_customer_snapshots(org_id, week_ago)
         prior_total = len(prior_snapshots)
         prior_counts = defaultdict(int)
         for snap in prior_snapshots:
@@ -113,6 +116,7 @@ class AnalyticsService:
 
     async def get_saved_by_ai(
         self,
+        org_id: uuid.UUID,
         period_start: datetime,
         period_end: datetime,
     ) -> SavedByAIResponse:
@@ -124,6 +128,8 @@ class AnalyticsService:
         stmt = select(CallTranscript, Customer).join(
             Customer, CallTranscript.customer_id == Customer.customer_id
         ).where(
+            CallTranscript.org_id == org_id,
+            Customer.org_id == org_id,
             CallTranscript.call_start_utc >= period_start,
             CallTranscript.call_start_utc <= period_end,
             CallTranscript.churn_risk_at_call_start.isnot(None),
@@ -213,6 +219,7 @@ class AnalyticsService:
 
     async def get_retention_events(
         self,
+        org_id: uuid.UUID,
         period_start: datetime,
         period_end: datetime,
     ) -> RetentionEventsResponse:
@@ -228,6 +235,8 @@ class AnalyticsService:
                 select(CallTranscript, Customer)
                 .join(Customer, CallTranscript.customer_id == Customer.customer_id)
                 .where(
+                    CallTranscript.org_id == org_id,
+                    Customer.org_id == org_id,
                     CallTranscript.call_start_utc >= period_start,
                     CallTranscript.call_start_utc <= period_end,
                 )
@@ -295,6 +304,8 @@ class AnalyticsService:
                 select(DispatchJob, Customer)
                 .join(Customer, DispatchJob.customer_id == Customer.customer_id)
                 .where(
+                    DispatchJob.org_id == org_id,
+                    Customer.org_id == org_id,
                     DispatchJob.created_at >= period_start,
                     DispatchJob.created_at <= period_end,
                     DispatchJob.priority.in_(("P1", "P2")),
@@ -322,6 +333,8 @@ class AnalyticsService:
                 select(ChurnScore, Customer)
                 .join(Customer, ChurnScore.entity_id == Customer.customer_id)
                 .where(
+                    ChurnScore.org_id == org_id,
+                    Customer.org_id == org_id,
                     ChurnScore.entity_type == "CUSTOMER",
                     ChurnScore.score_timestamp >= period_start,
                     ChurnScore.score_timestamp <= period_end,
@@ -347,10 +360,14 @@ class AnalyticsService:
 
         churned = (
             await self.db.execute(
-                select(Customer).where(
-                    Customer.account_status == "CHURNED",
-                    Customer.updated_at >= period_start,
-                    Customer.updated_at <= period_end,
+                scoped(
+                    select(Customer).where(
+                        Customer.account_status == "CHURNED",
+                        Customer.updated_at >= period_start,
+                        Customer.updated_at <= period_end,
+                    ),
+                    Customer,
+                    org_id,
                 )
             )
         ).scalars().all()
@@ -379,19 +396,19 @@ class AnalyticsService:
 
     async def get_feature_importance(
         self,
+        org_id: uuid.UUID,
         model_version: str = "latest",
     ) -> FeatureImportanceResponse:
         as_of = datetime.now(timezone.utc)
 
-        stmt = (
-            select(ChurnScore)
-            .where(
+        stmt = scoped(
+            select(ChurnScore).where(
                 ChurnScore.entity_type == "CUSTOMER",
                 ChurnScore.feature_contributions.isnot(None),
-            )
-            .order_by(ChurnScore.score_timestamp.desc())
-            .limit(500)
-        )
+            ),
+            ChurnScore,
+            org_id,
+        ).order_by(ChurnScore.score_timestamp.desc()).limit(500)
         if model_version != "latest":
             stmt = stmt.where(ChurnScore.model_version == model_version)
 
@@ -450,54 +467,65 @@ class AnalyticsService:
             features=features[:20],
         )
 
-    async def get_churn_timeline(self, customer_id: uuid.UUID) -> ChurnTimelineResponse:
+    async def get_churn_timeline(
+        self, org_id: uuid.UUID, customer_id: uuid.UUID
+    ) -> ChurnTimelineResponse:
         customer = await self.db.get(Customer, customer_id)
-        if customer is None:
+        if customer is None or customer.org_id != org_id:
             raise ValueError("Customer not found")
 
         since = datetime.now(timezone.utc) - timedelta(days=90)
 
         scores = (
             await self.db.execute(
-                select(ChurnScore)
-                .where(
-                    ChurnScore.entity_type == "CUSTOMER",
-                    ChurnScore.entity_id == customer_id,
-                    ChurnScore.score_timestamp >= since,
-                )
-                .order_by(ChurnScore.score_timestamp.asc())
+                scoped(
+                    select(ChurnScore).where(
+                        ChurnScore.entity_type == "CUSTOMER",
+                        ChurnScore.entity_id == customer_id,
+                        ChurnScore.score_timestamp >= since,
+                    ),
+                    ChurnScore,
+                    org_id,
+                ).order_by(ChurnScore.score_timestamp.asc())
             )
         ).scalars().all()
 
         transcripts = (
             await self.db.execute(
-                select(CallTranscript)
-                .where(
-                    CallTranscript.customer_id == customer_id,
-                    CallTranscript.call_start_utc >= since,
-                )
-                .order_by(CallTranscript.call_start_utc.asc())
+                scoped(
+                    select(CallTranscript).where(
+                        CallTranscript.customer_id == customer_id,
+                        CallTranscript.call_start_utc >= since,
+                    ),
+                    CallTranscript,
+                    org_id,
+                ).order_by(CallTranscript.call_start_utc.asc())
             )
         ).scalars().all()
 
         jobs = (
             await self.db.execute(
-                select(DispatchJob)
-                .where(
-                    DispatchJob.customer_id == customer_id,
-                    DispatchJob.created_at >= since,
-                )
-                .order_by(DispatchJob.created_at.asc())
+                scoped(
+                    select(DispatchJob).where(
+                        DispatchJob.customer_id == customer_id,
+                        DispatchJob.created_at >= since,
+                    ),
+                    DispatchJob,
+                    org_id,
+                ).order_by(DispatchJob.created_at.asc())
             )
         ).scalars().all()
 
         tickets = (
             await self.db.execute(
-                select(SupportTicket)
-                .where(
-                    SupportTicket.customer_id == customer_id,
-                    SupportTicket.resolved_at.isnot(None),
-                    SupportTicket.resolved_at >= since,
+                scoped(
+                    select(SupportTicket).where(
+                        SupportTicket.customer_id == customer_id,
+                        SupportTicket.resolved_at.isnot(None),
+                        SupportTicket.resolved_at >= since,
+                    ),
+                    SupportTicket,
+                    org_id,
                 )
             )
         ).scalars().all()
@@ -652,13 +680,14 @@ class AnalyticsService:
 
     async def get_cohort_heatmap(
         self,
+        org_id: uuid.UUID,
         window_days: int = 90,
         bucket_count: int = 10,
     ) -> CohortHeatmapResponse:
         """§5.1.3 — score buckets with ARR and intervention success rates."""
         as_of = datetime.now(timezone.utc)
         window_start = as_of - timedelta(days=window_days)
-        snapshots = await self._latest_customer_snapshots(as_of)
+        snapshots = await self._latest_customer_snapshots(org_id, as_of)
 
         if not snapshots or bucket_count < 1:
             return CohortHeatmapResponse(
@@ -703,9 +732,13 @@ class AnalyticsService:
             customer_ids = [snap["customer_id"] for snap in in_bucket]
             transcripts = (
                 await self.db.execute(
-                    select(CallTranscript).where(
-                        CallTranscript.customer_id.in_(customer_ids),
-                        CallTranscript.call_start_utc >= window_start,
+                    scoped(
+                        select(CallTranscript).where(
+                            CallTranscript.customer_id.in_(customer_ids),
+                            CallTranscript.call_start_utc >= window_start,
+                        ),
+                        CallTranscript,
+                        org_id,
                     )
                 )
             ).scalars().all()
@@ -736,10 +769,14 @@ class AnalyticsService:
             feature_counts: dict[str, int] = defaultdict(int)
             score_rows = (
                 await self.db.execute(
-                    select(ChurnScore).where(
-                        ChurnScore.entity_type == "CUSTOMER",
-                        ChurnScore.entity_id.in_(customer_ids),
-                        ChurnScore.feature_contributions.isnot(None),
+                    scoped(
+                        select(ChurnScore).where(
+                            ChurnScore.entity_type == "CUSTOMER",
+                            ChurnScore.entity_id.in_(customer_ids),
+                            ChurnScore.feature_contributions.isnot(None),
+                        ),
+                        ChurnScore,
+                        org_id,
                     )
                 )
             ).scalars().all()
@@ -756,7 +793,11 @@ class AnalyticsService:
 
             customers = (
                 await self.db.execute(
-                    select(Customer).where(Customer.customer_id.in_(customer_ids))
+                    scoped(
+                        select(Customer).where(Customer.customer_id.in_(customer_ids)),
+                        Customer,
+                        org_id,
+                    )
                 )
             ).scalars().all()
             name_by_id = {customer.customer_id: customer.full_name for customer in customers}
@@ -788,7 +829,9 @@ class AnalyticsService:
             buckets=buckets,
         )
 
-    async def _latest_customer_snapshots(self, as_of: datetime) -> list[dict[str, Any]]:
+    async def _latest_customer_snapshots(
+        self, org_id: uuid.UUID, as_of: datetime
+    ) -> list[dict[str, Any]]:
         """Latest churn score per customer at `as_of`, with metadata fallback."""
         latest_subq = (
             select(
@@ -796,6 +839,7 @@ class AnalyticsService:
                 func.max(ChurnScore.score_timestamp).label("max_ts"),
             )
             .where(
+                ChurnScore.org_id == org_id,
                 ChurnScore.entity_type == "CUSTOMER",
                 ChurnScore.score_timestamp <= as_of,
             )
@@ -814,7 +858,11 @@ class AnalyticsService:
                     ),
                 )
                 .join(Customer, ChurnScore.entity_id == Customer.customer_id)
-                .where(Customer.account_status.in_(("ACTIVE", "SUSPENDED", "PROSPECT")))
+                .where(
+                    ChurnScore.org_id == org_id,
+                    Customer.org_id == org_id,
+                    Customer.account_status.in_(("ACTIVE", "SUSPENDED", "PROSPECT")),
+                )
             )
         ).all()
 
@@ -829,8 +877,12 @@ class AnalyticsService:
 
         customers = (
             await self.db.execute(
-                select(Customer).where(
-                    Customer.account_status.in_(("ACTIVE", "SUSPENDED", "PROSPECT"))
+                scoped(
+                    select(Customer).where(
+                        Customer.account_status.in_(("ACTIVE", "SUSPENDED", "PROSPECT"))
+                    ),
+                    Customer,
+                    org_id,
                 )
             )
         ).scalars().all()

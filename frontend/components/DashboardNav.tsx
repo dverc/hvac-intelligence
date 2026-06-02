@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/customers", label: "Customers" },
   { href: "/dashboard/analytics", label: "Analytics" },
+  { href: "/dashboard/knowledge", label: "Knowledge Base" },
 ];
 
 export function DashboardNav() {

@@ -143,6 +143,6 @@ async def get_customer_churn_timeline(
     org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> ChurnTimelineResponse:
     try:
-        return await analytics.get_churn_timeline(customer_id)
+        return await analytics.get_churn_timeline(org_id, customer_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -54,6 +54,20 @@ async def get_ticket_service(db: AsyncSession = Depends(get_db)) -> TicketServic
     return TicketService(db)
 
 
+async def get_knowledge_service(db: AsyncSession = Depends(get_db)) -> "KnowledgeService":
+    from app.services.knowledge_service import KnowledgeService
+
+    return KnowledgeService(db)
+
+
+async def get_service_catalog_service(
+    db: AsyncSession = Depends(get_db),
+) -> "ServiceCatalogService":
+    from app.services.service_catalog_service import ServiceCatalogService
+
+    return ServiceCatalogService(db)
+
+
 async def get_tool_executor(
     customer_service: CustomerService = Depends(get_customer_service),
     dispatch_service: DispatchService = Depends(get_dispatch_service),

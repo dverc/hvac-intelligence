@@ -41,7 +41,24 @@ class RagKnowledgeQueryArgs(BaseModel):
     namespace: Optional[
         Literal["faq_general", "equipment_manuals", "warranty_terms", "troubleshooting", "pricing"]
     ] = None
+    namespace_override: Optional[
+        Literal["faq_general", "equipment_manuals", "warranty_terms", "troubleshooting", "pricing"]
+    ] = None
     top_k: int = Field(default=5, ge=1, le=10)
+
+
+class LookupServiceInfoArgs(BaseModel):
+    query: Optional[str] = None
+    category: Optional[str] = None
+    service_code: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_at_least_one_lookup_field(self) -> LookupServiceInfoArgs:
+        if not any([self.query, self.category, self.service_code]):
+            raise ValueError(
+                "At least one of query, category, or service_code must be provided."
+            )
+        return self
 
 
 class CreateSupportTicketArgs(BaseModel):

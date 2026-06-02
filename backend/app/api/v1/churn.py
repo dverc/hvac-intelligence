@@ -99,8 +99,10 @@ async def churn_cohorts(
     window_days: int = Query(default=90, ge=1),
     bucket_count: int = Query(default=10, ge=1, le=20),
     analytics: AnalyticsService = Depends(get_analytics_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> CohortHeatmapResponse:
     return await analytics.get_cohort_heatmap(
+        org_id,
         window_days=window_days,
         bucket_count=bucket_count,
     )
