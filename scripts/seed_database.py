@@ -19,7 +19,9 @@ os.chdir(BACKEND_ROOT)
 
 from app.core.config import get_settings  # noqa: E402
 from app.models.call_transcript import CallTranscript  # noqa: E402
+from app.models.churn_score import ChurnScore  # noqa: E402
 from app.models.customer import Customer  # noqa: E402
+from app.models.equipment import Equipment  # noqa: E402
 from app.models.technician import Technician  # noqa: E402
 
 
@@ -241,20 +243,129 @@ def seed_call_transcripts(
     return transcripts
 
 
+EQUIPMENT_PROFILES = [
+    ("Carrier", "Infinity 24ANB6", "AC_UNIT", 3),
+    ("Trane", "XR16", "AC_UNIT", 7),
+    ("Lennox", "EL16XC1", "AC_UNIT", 5),
+    ("Carrier", "58MCA", "FURNACE", 9),
+    ("Trane", "S9V2", "FURNACE", 11),
+    ("Lennox", "ML193", "FURNACE", 6),
+    ("Carrier", "25HCC5", "HEAT_PUMP", 4),
+    ("Trane", "XV20i", "AC_UNIT", 12),
+    ("Lennox", "XC21", "AC_UNIT", 2),
+    ("Carrier", "59MN7", "FURNACE", 8),
+]
+
+
+def seed_equipment(session: Session, customers: list[Customer]) -> int:
+    """One equipment row per customer (skips customers that already have equipment)."""
+    existing_ids = {
+        row[0]
+        for row in session.query(Equipment.customer_id).distinct().all()
+    }
+    today = date.today()
+    added = 0
+    for idx, customer in enumerate(customers):
+        if customer.customer_id in existing_ids:
+            continue
+        make, model, eq_type, age_years = EQUIPMENT_PROFILES[idx % len(EQUIPMENT_PROFILES)]
+        install_date = today - timedelta(days=365 * age_years)
+        session.add(
+            Equipment(
+                customer_id=customer.customer_id,
+                make=make,
+                model=model,
+                serial_number=f"SEED-{1000 + idx}-{uuid.uuid4().hex[:6].upper()}",
+                equipment_type=eq_type,
+                install_date=install_date,
+                last_service_date=today - timedelta(days=90 + (idx * 15) % 180),
+                service_count=2 + (idx % 5),
+                age_years=Decimal(str(age_years)),
+                known_issues=["no_cooling"] if idx % 4 == 0 else [],
+            )
+        )
+        added += 1
+    session.flush()
+    return added
+
+
+def _churn_probability_for_tier(tier: str, idx: int) -> Decimal:
+    if tier == "CRITICAL":
+        values = [Decimal("0.880"), Decimal("0.910"), Decimal("0.850"), Decimal("0.930")]
+    elif tier == "HIGH":
+        values = [Decimal("0.710"), Decimal("0.680"), Decimal("0.750"), Decimal("0.790")]
+    elif tier == "MEDIUM":
+        values = [Decimal("0.480"), Decimal("0.520")]
+    else:
+        values = [Decimal("0.220"), Decimal("0.180")]
+    return values[idx % len(values)]
+
+
+def seed_churn_scores(session: Session, customers: list[Customer]) -> int:
+    """Insert churn_scores for HIGH/CRITICAL customers missing a score row."""
+    added = 0
+    for idx, customer in enumerate(customers):
+        tier = str((customer.metadata_ or {}).get("churn_tier", "LOW")).upper()
+        if tier not in {"HIGH", "CRITICAL"}:
+            continue
+        existing = (
+            session.query(ChurnScore)
+            .filter(
+                ChurnScore.entity_type == "CUSTOMER",
+                ChurnScore.entity_id == customer.customer_id,
+            )
+            .first()
+        )
+        if existing is not None:
+            continue
+        prob = _churn_probability_for_tier(tier, idx)
+        session.add(
+            ChurnScore(
+                entity_type="CUSTOMER",
+                entity_id=customer.customer_id,
+                churn_probability=prob,
+                risk_tier=tier,
+                feature_contributions=[
+                    {
+                        "feature": "escalation_frequency",
+                        "shap_value": 0.12,
+                        "direction": "INCREASES_RISK",
+                    }
+                ],
+                model_version="seed_v1",
+                scoring_trigger="SEED_SCRIPT",
+                prediction_horizon_days=90,
+            )
+        )
+        added += 1
+    session.flush()
+    return added
+
+
 def main() -> None:
     engine = create_engine(sync_database_url())
     with Session(engine) as session:
         existing = session.query(Customer).count()
         if existing > 0:
-            print(f"Database already has {existing} customers; skipping seed.")
+            customers = session.query(Customer).order_by(Customer.full_name).all()
+            equipment_added = seed_equipment(session, customers)
+            churn_added = seed_churn_scores(session, customers)
+            session.commit()
+            print(
+                f"Backfill on existing DB ({existing} customers): "
+                f"+{equipment_added} equipment, +{churn_added} churn_scores."
+            )
             return
 
         techs = seed_technicians(session)
         customers = seed_customers(session, techs)
+        equipment_added = seed_equipment(session, customers)
+        churn_added = seed_churn_scores(session, customers)
         transcripts = seed_call_transcripts(session, customers, techs)
         session.commit()
         print(
             f"Seeded {len(techs)} technicians, {len(customers)} customers, "
+            f"{equipment_added} equipment, {churn_added} churn_scores, "
             f"{len(transcripts)} call transcripts."
         )
 

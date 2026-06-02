@@ -83,7 +83,13 @@ class KnowledgeIndexer:
             return self._mock_store.upsert(ids, vectors, metadatas, namespace)
 
         assert self._pinecone_index is not None
-        self._pinecone_index.upsert(vectors=vectors, ids=ids, metadatas=metadatas, namespace=namespace)
+        self._pinecone_index.upsert(
+            vectors=[
+                {"id": chunk_id, "values": vector, "metadata": metadata}
+                for chunk_id, vector, metadata in zip(ids, vectors, metadatas)
+            ],
+            namespace=namespace,
+        )
         return len(chunks)
 
     async def index_directory(

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = PROJECT_ROOT / "backend"
 sys.path.insert(0, str(BACKEND_ROOT))
+os.chdir(BACKEND_ROOT)
 
 from app.rag.constants import RAG_NAMESPACES
 from app.rag.indexer import KnowledgeIndexer

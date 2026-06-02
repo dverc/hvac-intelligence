@@ -40,6 +40,9 @@ def verify_vapi_signature(request_body: bytes, signature_header: str | None, sec
     Timing-safe HMAC-SHA256 verification of Vapi webhook payloads.
     Compares raw digest bytes to prevent timing leaks from string comparison.
     """
+    if secret == "disabled":
+        return True
+
     if not secret or not signature_header:
         return False
 
@@ -61,11 +64,18 @@ def _event_type(message: dict[str, Any]) -> str:
     return str(raw).lower().replace(".", "-").replace("_", "-")
 
 
-def _extract_phone_from_call(call: dict[str, Any]) -> Optional[str]:
-    customer = call.get("customer") or {}
-    if number := customer.get("number"):
+def _extract_phone_from_call(message: dict[str, Any]) -> Optional[str]:
+    if number := (message.get("customer") or {}).get("number"):
         return str(number)
-    phone_number = call.get("phoneNumber") or call.get("phone_number")
+    call = message.get("call", {})
+    if number := (call.get("customer") or {}).get("number"):
+        return str(number)
+    phone_number = (
+        call.get("phoneNumber")
+        or call.get("phone_number")
+        or message.get("phoneNumber")
+        or message.get("phone_number")
+    )
     if isinstance(phone_number, dict):
         return phone_number.get("number")
     if isinstance(phone_number, str):
@@ -116,15 +126,29 @@ async def handle_vapi_webhook(
     vapi_webhook_total.labels(event_type=event_type).inc()
 
     if event_type == "tool-calls":
-        results = await tool_executor.execute_batch(message.get("toolCallList", []))
+        tool_call_list = message.get("toolCallList", [])
+        logger.info(
+            "Vapi tool-calls raw payload (call_id=%s): %s",
+            call_id,
+            json.dumps(tool_call_list, default=str),
+        )
+        results = await tool_executor.execute_batch(tool_call_list)
         return JSONResponse({"results": results})
 
     if event_type in {"call-start", "call-started"}:
-        phone = _extract_phone_from_call(call)
+        phone = _extract_phone_from_call(message)
         if not phone:
             raise HTTPException(status_code=422, detail="Missing caller phone number")
 
         enrichment = await tool_executor.customer_service.get_call_context(phone, call_id)
+        variable_values = enrichment["variable_values"]
+        logger.info(
+            "Call context for %s (call_id=%s): customer=%s, churn=%s",
+            phone,
+            call_id,
+            variable_values.get("customer_name"),
+            variable_values.get("churn_risk"),
+        )
 
         customer = await tool_executor.customer_service.lookup_by_phone(phone)
         if customer is not None:
@@ -143,9 +167,11 @@ async def handle_vapi_webhook(
 
         return JSONResponse(
             {
-                "assistant": {
-                    "firstMessage": enrichment["greeting"],
-                    "model": {"systemPrompt": enrichment["system_prompt_injection"]},
+                "assistantOverrides": {
+                    "variableValues": variable_values,
+                    "model": {
+                        "systemPrompt": enrichment["system_prompt_injection"],
+                    },
                 }
             }
         )

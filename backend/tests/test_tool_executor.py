@@ -27,6 +27,46 @@ def tool_executor(db_session, mock_rag_retriever):
 
 
 @pytest.mark.asyncio
+async def test_execute_batch_parses_nested_function_tool_call(
+    tool_executor, seeded_customer
+):
+    tool_call_list = [
+        {
+            "id": "tc-nested",
+            "type": "function",
+            "function": {
+                "name": "query_churn_score",
+                "arguments": {"customer_id": seeded_customer["customer_id"]},
+            },
+        }
+    ]
+    results = await tool_executor.execute_batch(tool_call_list)
+    assert results[0]["toolCallId"] == "tc-nested"
+    payload = json.loads(results[0]["result"])
+    assert "churn_probability" in payload
+    assert payload["risk_tier"] == "HIGH"
+
+
+@pytest.mark.asyncio
+async def test_execute_batch_parses_stringified_function_arguments(
+    tool_executor, seeded_customer
+):
+    tool_call_list = [
+        {
+            "id": "tc-string-args",
+            "type": "function",
+            "function": {
+                "name": "query_churn_score",
+                "arguments": json.dumps({"customer_id": seeded_customer["customer_id"]}),
+            },
+        }
+    ]
+    results = await tool_executor.execute_batch(tool_call_list)
+    payload = json.loads(results[0]["result"])
+    assert payload["risk_tier"] == "HIGH"
+
+
+@pytest.mark.asyncio
 async def test_schedule_dispatch_creates_job(tool_executor, seeded_customer, db_session):
     customer_id = seeded_customer["customer_id"]
     result = json.loads(
@@ -46,6 +86,24 @@ async def test_schedule_dispatch_creates_job(tool_executor, seeded_customer, db_
     job = row.scalars().first()
     assert job is not None
     assert job.priority == "P1"
+
+
+@pytest.mark.asyncio
+async def test_query_churn_score_rejects_unresolved_template_customer_id(tool_executor):
+    result = json.loads(
+        await tool_executor.execute_query_churn_score(customer_id="{{customer_id}}")
+    )
+    assert "error" in result
+    assert "get_customer_info" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_support_ticket_rejects_missing_required_fields(tool_executor):
+    result = json.loads(await tool_executor.execute_create_ticket())
+    assert result["error"] == (
+        "Missing required fields. Please collect customer_id, ticket_type, "
+        "subject, description, and priority before calling this tool."
+    )
 
 
 @pytest.mark.asyncio

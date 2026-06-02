@@ -83,9 +83,18 @@ async def test_call_start_high_risk_injects_retention(db_session, seeded_custome
 
     assert response.status_code == 200
     data = response.json()
-    prompt = data["assistant"]["model"]["systemPrompt"]
+    overrides = data["assistantOverrides"]
+    assert "firstMessage" not in overrides
+    variables = overrides["variableValues"]
+    assert variables["customer_name"]
+    assert variables["equipment_info"]
+    assert "HIGH" in variables["churn_risk"] or "CHURN RISK" in variables.get(
+        "retention_protocol", ""
+    )
+    assert "retention" in variables.get("retention_protocol", "").lower()
+    prompt = overrides["model"]["systemPrompt"]
     assert "HIGH" in prompt or "CHURN RISK" in prompt
-    assert "retention" in prompt.lower() or "Retention" in prompt
+    assert "retention" in prompt.lower()
 
 
 @pytest.mark.asyncio
@@ -108,6 +117,38 @@ async def test_tool_calls_routes_to_handlers(api_client, mock_tool_executor):
     assert response.status_code == 200
     assert mock_tool_executor.calls
     assert mock_tool_executor.calls[0][0] == "query_churn_score"
+
+
+@pytest.mark.asyncio
+async def test_tool_calls_nested_function_name(api_client, mock_tool_executor):
+    payload = {
+        "message": {
+            "type": "tool-calls",
+            "call": {"id": "call-tools-nested"},
+            "toolCallList": [
+                {
+                    "id": "tc2",
+                    "type": "function",
+                    "function": {
+                        "name": "get_customer_info",
+                        "arguments": {
+                            "lookup_method": "phone",
+                            "lookup_value": "+15551234567",
+                        },
+                    },
+                }
+            ],
+        }
+    }
+    body, signature = sign_vapi_payload(payload)
+    response = await api_client.post(
+        "/webhook/vapi",
+        content=body,
+        headers={"x-vapi-signature": signature, "content-type": "application/json"},
+    )
+    assert response.status_code == 200
+    assert mock_tool_executor.calls
+    assert mock_tool_executor.calls[0][0] == "get_customer_info"
 
 
 @pytest.mark.asyncio

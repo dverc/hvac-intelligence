@@ -37,6 +37,41 @@ TOOL_REGISTRY: dict[str, str] = {
 }
 
 
+def _parse_vapi_tool_call(tool_call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    """Extract toolCallId, name, and arguments from Vapi tool-call payload variants."""
+    tool_call_id = str(tool_call.get("id") or tool_call.get("toolCallId") or "")
+
+    function_block = tool_call.get("function")
+    if not isinstance(function_block, dict):
+        nested = tool_call.get("toolCall")
+        if isinstance(nested, dict):
+            function_block = nested.get("function")
+
+    if isinstance(function_block, dict):
+        tool_name = str(function_block.get("name") or "")
+        raw_args = (
+            function_block.get("arguments")
+            if function_block.get("arguments") is not None
+            else function_block.get("parameters", {})
+        )
+    else:
+        tool_name = str(tool_call.get("name") or "")
+        raw_args = tool_call.get("arguments", {})
+
+    if isinstance(raw_args, str):
+        args = json.loads(raw_args) if raw_args else {}
+    elif isinstance(raw_args, dict):
+        args = raw_args
+    else:
+        args = {}
+
+    return tool_call_id, tool_name, args
+
+
+def _is_unresolved_template(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().startswith("{{")
+
+
 class ToolExecutor:
     def __init__(
         self,
@@ -61,16 +96,13 @@ class ToolExecutor:
         return await asyncio.gather(*tasks)
 
     async def _execute_single(self, tool_call: dict[str, Any]) -> dict[str, str]:
-        tool_name = tool_call.get("name", "")
-        tool_call_id = tool_call.get("id", "")
-        raw_args = tool_call.get("arguments", {})
-        args: dict[str, Any]
-        if isinstance(raw_args, str):
-            args = json.loads(raw_args) if raw_args else {}
-        elif isinstance(raw_args, dict):
-            args = raw_args
-        else:
-            args = {}
+        tool_call_id, tool_name, args = _parse_vapi_tool_call(tool_call)
+        logger.info(
+            "Executing Vapi tool call id=%s name=%s args=%s",
+            tool_call_id,
+            tool_name,
+            args,
+        )
 
         handler_name = TOOL_REGISTRY.get(tool_name)
         if not handler_name:
@@ -109,6 +141,17 @@ class ToolExecutor:
         return json.dumps(result)
 
     async def execute_query_churn_score(self, **kwargs: Any) -> str:
+        customer_id = kwargs.get("customer_id", "")
+        if _is_unresolved_template(customer_id):
+            return json.dumps(
+                {
+                    "error": (
+                        "customer_id is not available yet. Call get_customer_info first "
+                        "to resolve the customer_id, then retry query_churn_score."
+                    )
+                }
+            )
+
         parsed = QueryChurnScoreArgs.model_validate(kwargs)
         score = await self.churn_service.get_latest_score(parsed.customer_id)
         return json.dumps(score)
@@ -163,6 +206,24 @@ class ToolExecutor:
         return json.dumps({"retrieved_context": chunks})
 
     async def execute_create_ticket(self, **kwargs: Any) -> str:
+        required_fields = (
+            "customer_id",
+            "ticket_type",
+            "subject",
+            "description",
+            "priority",
+        )
+        missing_fields = [field for field in required_fields if not kwargs.get(field)]
+        if missing_fields:
+            return json.dumps(
+                {
+                    "error": (
+                        "Missing required fields. Please collect customer_id, ticket_type, "
+                        "subject, description, and priority before calling this tool."
+                    )
+                }
+            )
+
         parsed = CreateSupportTicketArgs.model_validate(kwargs)
         ticket = await self.ticket_service.create_ticket(
             customer_id=uuid.UUID(parsed.customer_id),

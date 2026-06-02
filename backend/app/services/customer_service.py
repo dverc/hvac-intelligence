@@ -232,30 +232,39 @@ class CustomerService:
         profile["found"] = True
         return profile
 
-    async def get_call_context(self, phone: str, call_id: str) -> dict[str, str]:
+    async def get_call_context(self, phone: str, call_id: str) -> dict[str, Any]:
         customer = await self.lookup_by_phone(phone)
         if customer is None:
             return {
-                "greeting": (
-                    "Thank you for calling HVAC Intelligence. "
-                    "I don't have an account linked to this number yet — how can I help you today?"
-                ),
+                "variable_values": {
+                    "call_id": call_id,
+                    "customer_name": "Unknown caller",
+                    "customer_id": "N/A",
+                    "account_status": "No CRM match",
+                    "equipment_info": "None on file",
+                    "open_tickets": "0",
+                    "churn_risk": "Unknown",
+                    "retention_protocol": (
+                        "Collect name, address, and issue details. "
+                        "Offer to create a service request."
+                    ),
+                },
                 "system_prompt_injection": (
                     "CALLER STATUS: Unknown phone number (no CRM match).\n"
                     f"call_id: {call_id}\n"
-                    "Collect name, address, and issue details. Offer to create a service request."
+                    "Collect name, address, and issue details. "
+                    "Offer to create a service request."
                 ),
             }
 
         profile = await self.build_customer_profile(customer)
-        first_name = customer.full_name.split()[0]
         equipment = profile["equipment"]
         primary_unit = equipment[0] if equipment else None
         churn = profile["churn"]
         risk_tier = churn.get("risk_tier", "LOW")
         churn_prob = churn.get("churn_probability", 0.0)
 
-        equipment_line = ""
+        equipment_line = "None on file"
         if primary_unit:
             age = primary_unit.get("age_years")
             age_str = f"{age:.0f} years old" if age is not None else "age unknown"
@@ -264,36 +273,42 @@ class CustomerService:
                 f"last service: {primary_unit.get('last_service_date') or 'no record on file'}"
             )
 
-        retention_block = ""
+        retention_protocol = ""
         if risk_tier in {"HIGH", "CRITICAL"}:
-            retention_block = (
-                f"\n⚠️ {risk_tier} CHURN RISK (probability {churn_prob:.0%}): "
+            retention_protocol = (
+                f"⚠️ {risk_tier} CHURN RISK (probability {churn_prob:.0%}): "
                 "Apply retention protocol. Offer priority dispatch, empathy, and proactive resolution. "
                 "Avoid transfers unless safety-critical."
             )
-
-        greeting = f"Hi {first_name}, thank you for calling HVAC Intelligence."
-        if equipment_line:
-            greeting += f" I see your {equipment_line.split(',')[0]} on file."
-        greeting += " How can I help you today?"
 
         system_prompt = (
             f"CUSTOMER CONTEXT (call_id={call_id}):\n"
             f"- Name: {customer.full_name}\n"
             f"- customer_id: {customer.customer_id}\n"
             f"- Account: {customer.account_status} | Contract: {customer.contract_type or 'N/A'}\n"
-        )
-        if equipment_line:
-            system_prompt += f"- Primary equipment: {equipment_line}\n"
-        system_prompt += (
+            f"- Primary equipment: {equipment_line}\n"
             f"- Open tickets: {len(profile['open_tickets'])}\n"
             f"- Churn risk: {risk_tier} ({churn_prob:.1%})\n"
-            f"{retention_block}\n"
+        )
+        if retention_protocol:
+            system_prompt += f"\n{retention_protocol}\n"
+        system_prompt += (
             "Use tools to schedule dispatch, query churn, and pull equipment details as needed."
         )
 
         return {
-            "greeting": greeting,
+            "variable_values": {
+                "call_id": call_id,
+                "customer_name": customer.full_name,
+                "customer_id": str(customer.customer_id),
+                "account_status": (
+                    f"{customer.account_status} | Contract: {customer.contract_type or 'N/A'}"
+                ),
+                "equipment_info": equipment_line,
+                "open_tickets": str(len(profile["open_tickets"])),
+                "churn_risk": f"{risk_tier} ({churn_prob:.1%})",
+                "retention_protocol": retention_protocol,
+            },
             "system_prompt_injection": system_prompt.strip(),
             "customer_id": str(customer.customer_id),
         }

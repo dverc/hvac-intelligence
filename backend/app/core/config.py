@@ -1,5 +1,10 @@
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings
+
+# Project root .env (backend/app/core -> ../../../.env)
+_ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 class Settings(BaseSettings):
     # App
@@ -47,7 +52,7 @@ class Settings(BaseSettings):
     RAG_MMR_LAMBDA: float = 0.5
 
     class Config:
-        env_file = ".env"
+        env_file = str(_ROOT_ENV_FILE)
         case_sensitive = True
         extra = "ignore"
 

@@ -170,10 +170,11 @@ class MockToolExecutor:
         self.calls: list[tuple[str, dict]] = []
 
     async def execute_batch(self, tool_call_list: list[dict]) -> list[dict]:
+        from app.services.tool_executor import _parse_vapi_tool_call
+
         results = []
         for tool_call in tool_call_list:
-            name = tool_call.get("name", "")
-            tool_id = tool_call.get("id", "tc-1")
+            tool_id, name, _ = _parse_vapi_tool_call(tool_call)
             self.calls.append((name, tool_call))
             payloads = {
                 "schedule_dispatch": {"job_number": "DX-TEST-1", "job_id": str(uuid.uuid4())},
