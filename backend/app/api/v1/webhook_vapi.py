@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.api.deps import get_tool_executor
 from app.core.config import get_settings
 from app.core.metrics import vapi_webhook_total
+from app.core.rate_limit import limiter
 from app.core.database import get_session_factory
 from app.pipeline.event_bus import publish_call_active_event
 from app.services.tool_executor import ToolExecutor
@@ -40,7 +41,8 @@ def verify_vapi_signature(request_body: bytes, signature_header: str | None, sec
     Timing-safe HMAC-SHA256 verification of Vapi webhook payloads.
     Compares raw digest bytes to prevent timing leaks from string comparison.
     """
-    if secret == "disabled":
+    settings = get_settings()
+    if settings.VAPI_WEBHOOK_HMAC_BYPASS and settings.ENVIRONMENT != "production":
         return True
 
     if not secret or not signature_header:
@@ -108,9 +110,9 @@ async def _process_call_end_background(call_data: dict[str, Any]) -> None:
 
 
 @router.post("")
+@limiter.limit("120/minute", override_defaults=True)
 async def handle_vapi_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
     tool_executor: ToolExecutor = Depends(get_tool_executor),
 ) -> JSONResponse:
     settings = get_settings()
@@ -190,7 +192,8 @@ async def handle_vapi_webhook(
         )
 
     if event_type in {"call-end", "call-ended", "end-of-call-report"}:
-        background_tasks.add_task(_process_call_end_background, message)
-        return JSONResponse({"status": "accepted"})
+        background = BackgroundTasks()
+        background.add_task(_process_call_end_background, message)
+        return JSONResponse({"status": "accepted"}, background=background)
 
     return JSONResponse({"status": "ok"})

@@ -185,3 +185,158 @@ async def test_get_equipment_info_returns_view_data(
     assert result["found"] is True
     assert len(result["equipment"]) >= 1
     assert result["equipment"][0].get("make") == "Carrier"
+
+
+@pytest.mark.asyncio
+async def test_create_customer_success(tool_executor, db_session):
+    phone = "+15559998877"
+    result = json.loads(
+        await tool_executor.execute_create_customer(
+            full_name="Jane Newcaller",
+            phone_primary=phone,
+            service_address_line1="123 Main St",
+            service_address_city="Irvine",
+            service_address_state="CA",
+            service_address_zip="92618",
+            email="jane@example.com",
+        )
+    )
+    assert result["status"] == "created"
+    assert result["customer_id"]
+    assert "Jane Newcaller" in result["message"]
+
+    from app.models.customer import Customer
+
+    row = await db_session.execute(
+        select(Customer).where(Customer.phone_primary == phone)
+    )
+    customer = row.scalar_one_or_none()
+    assert customer is not None
+    assert customer.full_name == "Jane Newcaller"
+    assert customer.external_id.startswith("VOICE-")
+
+
+@pytest.mark.asyncio
+async def test_create_customer_duplicate_phone_returns_error(
+    tool_executor, seeded_customer
+):
+    result = json.loads(
+        await tool_executor.execute_create_customer(
+            full_name="Duplicate Test",
+            phone_primary=seeded_customer["phone"],
+            service_address_line1="456 Oak Ave",
+            service_address_city="Irvine",
+            service_address_state="CA",
+            service_address_zip="92618",
+        )
+    )
+    assert "error" in result
+    assert "already exists" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_customer_updates_address(tool_executor, seeded_customer, db_session):
+    customer_id = seeded_customer["customer_id"]
+    result = json.loads(
+        await tool_executor.execute_update_customer(
+            customer_id=customer_id,
+            service_address_line1="165 Deeley St",
+            service_address_city="Irvine",
+            service_address_state="CA",
+            service_address_zip="92614",
+        )
+    )
+    assert result["status"] == "updated"
+    assert "service_address_line1" in result["updated_fields"]
+
+    from app.models.customer import Customer
+
+    customer = await db_session.get(Customer, uuid.UUID(customer_id))
+    assert customer.address_line1 == "165 Deeley St"
+    assert customer.city == "Irvine"
+
+
+@pytest.mark.asyncio
+async def test_update_customer_empty_args_returns_validation_error(tool_executor, seeded_customer):
+    result = json.loads(
+        await tool_executor.execute_update_customer(
+            customer_id=seeded_customer["customer_id"],
+        )
+    )
+    assert "error" in result
+    assert "at least one field" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_create_equipment_success(tool_executor, seeded_customer, db_session):
+    customer_id = seeded_customer["customer_id"]
+    result = json.loads(
+        await tool_executor.execute_create_equipment(
+            customer_id=customer_id,
+            equipment_type="FURNACE",
+            make="Lennox",
+            model="SL280V",
+            install_year=2019,
+        )
+    )
+    assert result["status"] == "created"
+    assert result["equipment_id"]
+
+    from app.models.equipment import Equipment
+
+    row = await db_session.execute(
+        select(Equipment).where(Equipment.customer_id == uuid.UUID(customer_id))
+    )
+    units = row.scalars().all()
+    assert any(e.make == "Lennox" and e.model == "SL280V" for e in units)
+
+
+@pytest.mark.asyncio
+async def test_update_dispatch_address_correction_appended_to_notes(
+    tool_executor, seeded_customer, db_session
+):
+    dispatch_result = json.loads(
+        await tool_executor.execute_schedule_dispatch(
+            customer_id=seeded_customer["customer_id"],
+            issue_type="AC_FAILURE",
+            priority="P2",
+            preferred_window="tomorrow afternoon",
+            issue_description="Unit not cooling",
+        )
+    )
+    job_id = dispatch_result["job_id"]
+
+    result = json.loads(
+        await tool_executor.execute_update_dispatch(
+            job_id=job_id,
+            service_address_override="165 Deeley, Irvine CA",
+        )
+    )
+    assert result["status"] == "updated"
+
+    job = await db_session.get(DispatchJob, uuid.UUID(job_id))
+    assert "ADDRESS CORRECTION: 165 Deeley, Irvine CA" in (job.issue_description or "")
+
+
+@pytest.mark.asyncio
+async def test_update_dispatch_cancel_sets_status_cancelled(
+    tool_executor, seeded_customer, db_session
+):
+    dispatch_result = json.loads(
+        await tool_executor.execute_schedule_dispatch(
+            customer_id=seeded_customer["customer_id"],
+            issue_type="AC_FAILURE",
+            priority="P3",
+            preferred_window="tomorrow",
+            issue_description="No longer needed",
+        )
+    )
+    job_id = dispatch_result["job_id"]
+
+    result = json.loads(
+        await tool_executor.execute_update_dispatch(job_id=job_id, cancel=True)
+    )
+    assert result["status"] == "updated"
+
+    job = await db_session.get(DispatchJob, uuid.UUID(job_id))
+    assert job.job_status == "CANCELLED"

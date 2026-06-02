@@ -12,17 +12,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import observe_tool_execution
 from app.rag.retriever import RAGRetriever
+from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
 from app.schemas.tools import (
+    CreateCustomerArgs,
+    CreateEquipmentArgs,
     CreateSupportTicketArgs,
     GetCustomerInfoArgs,
     GetEquipmentInfoArgs,
     QueryChurnScoreArgs,
     RagKnowledgeQueryArgs,
     ScheduleDispatchArgs,
+    UpdateCustomerArgs,
+    UpdateDispatchArgs,
 )
 from app.services.churn_service import ChurnService
 from app.services.customer_service import CustomerService
 from app.services.dispatch_service import DispatchService
+from app.services.equipment_service import EquipmentService
 from app.services.ticket_service import TicketService
 
 logger = logging.getLogger(__name__)
@@ -34,6 +40,10 @@ TOOL_REGISTRY: dict[str, str] = {
     "get_equipment_info": "execute_get_equipment_info",
     "rag_knowledge_query": "execute_rag_query",
     "create_support_ticket": "execute_create_ticket",
+    "create_customer": "execute_create_customer",
+    "update_customer": "execute_update_customer",
+    "create_equipment": "execute_create_equipment",
+    "update_dispatch": "execute_update_dispatch",
 }
 
 
@@ -234,6 +244,104 @@ class ToolExecutor:
             preferred_callback_time=parsed.preferred_callback_time,
         )
         return json.dumps({"success": True, "ticket": ticket})
+
+    async def execute_create_customer(self, **kwargs: Any) -> str:
+        parsed = CreateCustomerArgs.model_validate(kwargs)
+        result = await self.customer_service.create_customer(parsed)
+        if not result.get("success"):
+            return json.dumps({"error": result.get("error", "Failed to create customer")})
+        return json.dumps(
+            {
+                "status": "created",
+                "customer_id": result["customer_id"],
+                "message": result["message"],
+            }
+        )
+
+    async def execute_update_customer(self, **kwargs: Any) -> str:
+        try:
+            parsed = UpdateCustomerArgs.model_validate(kwargs)
+        except Exception as exc:
+            return json.dumps(
+                {
+                    "error": (
+                        "Invalid update request. Provide customer_id and at least one "
+                        f"field to update. Details: {exc}"
+                    )
+                }
+            )
+
+        address_fields: dict[str, str] = {}
+        updated_fields: list[str] = []
+        for arg_name, patch_key in (
+            ("service_address_line1", "line1"),
+            ("service_address_line2", "line2"),
+            ("service_address_city", "city"),
+            ("service_address_state", "state"),
+            ("service_address_zip", "zip"),
+        ):
+            value = getattr(parsed, arg_name)
+            if value is not None:
+                address_fields[patch_key] = value
+                updated_fields.append(arg_name)
+
+        payload_data: dict[str, Any] = {}
+        for field in ("full_name", "phone_primary", "email", "notes"):
+            value = getattr(parsed, field)
+            if value is not None:
+                payload_data[field] = value
+                updated_fields.append(field)
+
+        if address_fields:
+            payload_data["address"] = CustomerAddressPatch(**address_fields)
+
+        update_payload = CustomerUpdate(**payload_data)
+
+        customer = await self.customer_service.update_customer(
+            uuid.UUID(parsed.customer_id),
+            update_payload,
+        )
+        if customer is None:
+            return json.dumps({"error": f"Customer {parsed.customer_id} not found"})
+
+        return json.dumps(
+            {
+                "status": "updated",
+                "customer_id": parsed.customer_id,
+                "updated_fields": sorted(set(updated_fields)),
+                "message": "Account updated successfully.",
+            }
+        )
+
+    async def execute_create_equipment(self, **kwargs: Any) -> str:
+        parsed = CreateEquipmentArgs.model_validate(kwargs)
+        equipment_service = EquipmentService(self.db)
+        result = await equipment_service.create_equipment(parsed)
+        if not result.get("success"):
+            return json.dumps({"error": result.get("error", "Failed to create equipment")})
+        return json.dumps(
+            {
+                "status": "created",
+                "equipment_id": result["equipment_id"],
+                "message": (
+                    f"Equipment registered: {result['make']} {result['model']} "
+                    f"({result['equipment_type']})."
+                ),
+            }
+        )
+
+    async def execute_update_dispatch(self, **kwargs: Any) -> str:
+        parsed = UpdateDispatchArgs.model_validate(kwargs)
+        result = await self.dispatch_service.update_job(parsed)
+        if not result.get("success"):
+            return json.dumps({"error": result.get("error", "Failed to update dispatch")})
+        return json.dumps(
+            {
+                "status": "updated",
+                "job_id": result["job_id"],
+                "message": result["message"],
+            }
+        )
 
 
 def _serialize_equipment_row(row: Any) -> dict[str, Any]:

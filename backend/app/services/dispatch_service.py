@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
 from app.models.technician import Technician
+from app.schemas.tools import UpdateDispatchArgs
 
 
 def _generate_job_number() -> str:
@@ -150,4 +151,56 @@ class DispatchService:
                 f"{first_name} will arrive "
                 f"{preferred_window}. Confirmation: {job.job_number}."
             ),
+        }
+
+    async def update_job(self, args: UpdateDispatchArgs) -> dict[str, Any]:
+        job = await self.db.get(DispatchJob, uuid.UUID(args.job_id))
+        if job is None:
+            return {"success": False, "error": f"Dispatch job {args.job_id} not found"}
+
+        changes: list[str] = []
+        description = job.issue_description or ""
+
+        if args.cancel:
+            job.job_status = "CANCELLED"
+            changes.append("booking cancelled")
+
+        if args.preferred_window:
+            window_start, window_end = _parse_preferred_window(args.preferred_window)
+            job.scheduled_window_start = window_start
+            job.scheduled_window_end = window_end
+            changes.append(f"window updated to {args.preferred_window}")
+
+        if args.service_address_override:
+            correction = f"ADDRESS CORRECTION: {args.service_address_override}"
+            description = f"{description}\n\n{correction}".strip() if description else correction
+            changes.append("service address corrected")
+
+        if args.notes:
+            note_line = f"NOTE: {args.notes}"
+            description = f"{description}\n\n{note_line}".strip() if description else note_line
+            changes.append("notes added")
+
+        if description != (job.issue_description or ""):
+            job.issue_description = description
+
+        if not changes:
+            return {
+                "success": True,
+                "job_id": str(job.job_id),
+                "job_number": job.job_number,
+                "message": "No changes were requested.",
+                "changes": [],
+            }
+
+        await self.db.flush()
+
+        summary = ", ".join(changes)
+        return {
+            "success": True,
+            "job_id": str(job.job_id),
+            "job_number": job.job_number,
+            "job_status": job.job_status,
+            "changes": changes,
+            "message": f"Booking updated. {summary.capitalize()}.",
         }

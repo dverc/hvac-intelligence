@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import secrets
 import uuid
+from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -12,7 +14,8 @@ from sqlalchemy.orm import selectinload
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
 from app.models.support_ticket import SupportTicket
-from app.schemas.customer import CustomerUpdate
+from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
+from app.schemas.tools import CreateCustomerArgs
 from app.services.churn_service import ChurnService
 
 _ADDRESS_FIELD_MAP = {
@@ -89,9 +92,52 @@ class CustomerService:
                 value = Decimal(str(value))
             setattr(customer, field, value)
 
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(customer)
         return await self.get_by_id(customer_id)
+
+    async def create_customer(self, args: CreateCustomerArgs) -> dict[str, Any]:
+        normalized_phone = normalize_phone(args.phone_primary)
+        existing = await self.lookup_by_phone(normalized_phone)
+        if existing is not None:
+            return {
+                "success": False,
+                "error": (
+                    f"A customer with phone {normalized_phone} already exists "
+                    f"(customer_id={existing.customer_id})."
+                ),
+            }
+
+        customer = Customer(
+            external_id=f"VOICE-{secrets.token_hex(4).upper()}",
+            full_name=args.full_name.strip(),
+            phone_primary=normalized_phone,
+            email=args.email,
+            address_line1=args.service_address_line1,
+            address_line2=None,
+            city=args.service_address_city,
+            state=args.service_address_state.upper(),
+            zip=args.service_address_zip,
+            account_status="ACTIVE",
+            customer_since=date.today(),
+            contract_type=args.contract_type,
+            notes=args.notes,
+        )
+        self.db.add(customer)
+        await self.db.flush()
+
+        customer_id = str(customer.customer_id)
+        return {
+            "success": True,
+            "customer_id": customer_id,
+            "external_id": customer.external_id,
+            "full_name": customer.full_name,
+            "phone_primary": customer.phone_primary,
+            "message": (
+                f"Account created for {customer.full_name}. "
+                f"Customer ID: {customer_id}. You can now schedule service."
+            ),
+        }
 
     async def get_by_email(self, email: str) -> Optional[Customer]:
         stmt = select(Customer).where(func.lower(Customer.email) == email.lower())
@@ -233,11 +279,27 @@ class CustomerService:
         return profile
 
     async def get_call_context(self, phone: str, call_id: str) -> dict[str, Any]:
+        normalized_phone = normalize_phone(phone)
         customer = await self.lookup_by_phone(phone)
         if customer is None:
+            unknown_prompt = (
+                "CALLER STATUS: Unknown phone number (no CRM match).\n"
+                f"call_id: {call_id}\n"
+                f"caller_phone: {normalized_phone}\n\n"
+                "This phone number is not in our system. Welcome the caller warmly and offer:\n"
+                "Option 1 — Create a new account: collect full_name, service_address "
+                "(line1, city, state, zip), phone_primary (already known: "
+                f"{normalized_phone}), email (optional), then call create_customer. "
+                "After account creation, ask if they have equipment to register and call "
+                "create_equipment if yes. Then ask about their service need and call "
+                "schedule_dispatch.\n"
+                "Option 2 — They may have an account under a different number: ask for "
+                "their other number or email and call get_customer_info."
+            )
             return {
                 "variable_values": {
                     "call_id": call_id,
+                    "caller_phone": normalized_phone,
                     "customer_name": "Unknown caller",
                     "customer_id": "N/A",
                     "account_status": "No CRM match",
@@ -245,16 +307,10 @@ class CustomerService:
                     "open_tickets": "0",
                     "churn_risk": "Unknown",
                     "retention_protocol": (
-                        "Collect name, address, and issue details. "
-                        "Offer to create a service request."
+                        "New caller onboarding: offer create_customer or lookup by alternate contact."
                     ),
                 },
-                "system_prompt_injection": (
-                    "CALLER STATUS: Unknown phone number (no CRM match).\n"
-                    f"call_id: {call_id}\n"
-                    "Collect name, address, and issue details. "
-                    "Offer to create a service request."
-                ),
+                "system_prompt_injection": unknown_prompt,
             }
 
         profile = await self.build_customer_profile(customer)
@@ -293,6 +349,13 @@ class CustomerService:
         if retention_protocol:
             system_prompt += f"\n{retention_protocol}\n"
         system_prompt += (
+            "\nIMPORTANT: The caller's phone number matched an existing account for "
+            f"{customer.full_name}. Before proceeding, confirm their identity by asking: "
+            f"'Am I speaking with {customer.full_name}?'\n"
+            "If they confirm: proceed normally.\n"
+            "If they say no or want a different account: call get_customer_info with "
+            "their provided phone number or email.\n"
+            "If they want to create a new account: call create_customer with their details.\n"
             "Use tools to schedule dispatch, query churn, and pull equipment details as needed."
         )
 

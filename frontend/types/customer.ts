@@ -97,14 +97,3 @@ export interface CustomerUpdatePayload {
     zip?: string;
   };
 }
-
-export interface CustomerTranscriptsResponse {
-  customer_id: string;
-  transcripts: {
-    transcript_id: string;
-    call_id: string;
-    call_outcome: string | null;
-    call_start_utc: string;
-    sentiment_overall: number | null;
-  }[];
-}

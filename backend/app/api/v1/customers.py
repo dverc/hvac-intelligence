@@ -11,6 +11,10 @@ from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
 from app.schemas.analytics import ChurnTimelineResponse
 from app.schemas.customer import CustomerUpdate
+from app.schemas.transcript import (
+    CustomerTranscriptsResponse,
+    transcript_to_summary,
+)
 from app.services.analytics_service import AnalyticsService
 from app.services.customer_service import CustomerService
 
@@ -100,11 +104,14 @@ async def patch_customer(
     return await customer_service.build_customer_profile(customer)
 
 
-@router.get("/{customer_id}/transcripts")
+@router.get(
+    "/{customer_id}/transcripts",
+    response_model=CustomerTranscriptsResponse,
+)
 async def get_customer_transcripts(
     customer_id: uuid.UUID,
     customer_service: CustomerService = Depends(get_customer_service),
-) -> dict:
+) -> CustomerTranscriptsResponse:
     rows = (
         await customer_service.db.execute(
             select(CallTranscript)
@@ -112,21 +119,10 @@ async def get_customer_transcripts(
             .order_by(CallTranscript.call_start_utc.desc())
         )
     ).scalars().all()
-    return {
-        "customer_id": str(customer_id),
-        "transcripts": [
-            {
-                "transcript_id": str(t.transcript_id),
-                "call_id": t.call_id,
-                "call_outcome": t.call_outcome,
-                "call_start_utc": t.call_start_utc.isoformat(),
-                "sentiment_overall": float(t.sentiment_overall)
-                if t.sentiment_overall is not None
-                else None,
-            }
-            for t in rows
-        ],
-    }
+    return CustomerTranscriptsResponse(
+        customer_id=str(customer_id),
+        transcripts=[transcript_to_summary(t) for t in rows],
+    )
 
 
 @router.get("/{customer_id}/churn-timeline", response_model=ChurnTimelineResponse)

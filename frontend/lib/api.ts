@@ -11,12 +11,25 @@ import type {
 import type {
   CustomerListResponse,
   CustomerProfile,
-  CustomerTranscriptsResponse,
   CustomerUpdatePayload,
 } from "@/types/customer";
+import type {
+  CustomerTranscriptsResponse,
+  TranscriptDetail,
+} from "@/types/transcript";
+
+import { getPublicApiKey } from "@/lib/config";
 
 export function getApiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+}
+
+function apiKeyHeaders(): Record<string, string> {
+  const key = getPublicApiKey();
+  if (!key) {
+    return {};
+  }
+  return { "X-API-Key": key };
 }
 
 export class ApiError extends Error {
@@ -44,7 +57,7 @@ async function apiGet<T>(
 
   const response = await fetch(url.toString(), {
     cache: "no-store",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...apiKeyHeaders() },
   });
 
   if (!response.ok) {
@@ -59,7 +72,7 @@ async function apiPost<T>(path: string): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "POST",
     cache: "no-store",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...apiKeyHeaders() },
   });
 
   if (!response.ok) {
@@ -77,6 +90,7 @@ async function apiPatch<T>(path: string, payload: CustomerUpdatePayload): Promis
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
+      ...apiKeyHeaders(),
     },
     body: JSON.stringify(payload),
   });
@@ -151,6 +165,16 @@ export function getCustomerTranscripts(customerId: string) {
   );
 }
 
+export function getCallDetail(callId: string) {
+  return apiGet<TranscriptDetail>(`/api/v1/calls/${callId}`);
+}
+
+export type {
+  CustomerTranscriptsResponse,
+  TranscriptDetail,
+  TranscriptSummary,
+} from "@/types/transcript";
+
 export function getCustomerChurnTimeline(customerId: string) {
   return apiGet<ChurnTimelineResponse>(
     `/api/v1/customers/${customerId}/churn-timeline`,
@@ -187,9 +211,14 @@ export function getFeatureImportance(modelVersion = "latest") {
 
 // ── SSE (dashboard real-time) ───────────────────────────────────────────────
 
-/** URL for EventSource — not a JSON fetch. */
+/** URL for EventSource — not a JSON fetch. Auth via query param (SSE cannot set headers). */
 export function getChurnEventsStreamUrl() {
-  return `${getApiBaseUrl()}/api/v1/stream/churn-events`;
+  const url = new URL(`${getApiBaseUrl()}/api/v1/stream/churn-events`);
+  const key = getPublicApiKey();
+  if (key) {
+    url.searchParams.set("api_key", key);
+  }
+  return url.toString();
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

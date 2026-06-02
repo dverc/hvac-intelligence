@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChurnRiskContext(BaseModel):
@@ -65,3 +65,76 @@ class ToolCallPayload(BaseModel):
     id: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateCustomerArgs(BaseModel):
+    full_name: str
+    phone_primary: str
+    service_address_line1: str
+    service_address_city: str
+    service_address_state: str = Field(min_length=2, max_length=2)
+    service_address_zip: str
+    email: Optional[str] = None
+    contract_type: Literal[
+        "RESIDENTIAL_OTC", "ANNUAL_MAINTENANCE", "COMMERCIAL_SLA"
+    ] = "RESIDENTIAL_OTC"
+    notes: Optional[str] = None
+
+
+class UpdateCustomerArgs(BaseModel):
+    customer_id: str
+    full_name: Optional[str] = None
+    phone_primary: Optional[str] = None
+    email: Optional[str] = None
+    service_address_line1: Optional[str] = None
+    service_address_line2: Optional[str] = None
+    service_address_city: Optional[str] = None
+    service_address_state: Optional[str] = None
+    service_address_zip: Optional[str] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_at_least_one_update_field(self) -> UpdateCustomerArgs:
+        update_fields = (
+            "full_name",
+            "phone_primary",
+            "email",
+            "service_address_line1",
+            "service_address_line2",
+            "service_address_city",
+            "service_address_state",
+            "service_address_zip",
+            "notes",
+        )
+        if not any(getattr(self, field) is not None for field in update_fields):
+            raise ValueError(
+                "At least one field to update must be provided besides customer_id."
+            )
+        return self
+
+
+class CreateEquipmentArgs(BaseModel):
+    customer_id: str
+    equipment_type: Literal[
+        "AC_UNIT",
+        "FURNACE",
+        "HEAT_PUMP",
+        "WATER_HEATER",
+        "ELECTRICAL_PANEL",
+        "PLUMBING_SYSTEM",
+        "INTERNET_ROUTER",
+        "OTHER",
+    ]
+    make: Optional[str] = None
+    model: Optional[str] = None
+    install_year: Optional[int] = Field(default=None, ge=1900, le=2100)
+    serial_number: Optional[str] = None
+    known_issues: Optional[list[str]] = None
+
+
+class UpdateDispatchArgs(BaseModel):
+    job_id: str
+    service_address_override: Optional[str] = None
+    preferred_window: Optional[str] = None
+    notes: Optional[str] = None
+    cancel: Optional[bool] = False

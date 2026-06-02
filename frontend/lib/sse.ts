@@ -2,15 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { getChurnEventsStreamUrl } from "@/lib/api";
 import type { SSEChurnEvent } from "@/types/churn";
 
-export function useChurnEventStream(apiBase: string) {
+export function useChurnEventStream() {
   const [events, setEvents] = useState<SSEChurnEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    const es = new EventSource(`${apiBase}/api/v1/stream/churn-events`);
+    const es = new EventSource(getChurnEventsStreamUrl());
     esRef.current = es;
 
     es.onopen = () => setConnected(true);
@@ -32,7 +33,7 @@ export function useChurnEventStream(apiBase: string) {
       es.close();
       setConnected(false);
     };
-  }, [apiBase]);
+  }, []);
 
   return { events, connected };
 }

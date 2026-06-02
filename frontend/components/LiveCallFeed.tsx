@@ -5,7 +5,6 @@ import { format, parseISO } from "date-fns";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { getApiBaseUrl } from "@/lib/api";
 import { useChurnEventStream } from "@/lib/sse";
 import type { SSEChurnEvent } from "@/types/churn";
 import { RiskBadge } from "@/components/RiskBadge";
@@ -65,8 +64,7 @@ function EventCard({ event }: { event: SSEChurnEvent }) {
 }
 
 export function LiveCallFeed() {
-  const apiBase = getApiBaseUrl();
-  const { events, connected } = useChurnEventStream(apiBase);
+  const { events, connected } = useChurnEventStream();
   const [toast, setToast] = useState<SSEChurnEvent | null>(null);
 
   useEffect(() => {

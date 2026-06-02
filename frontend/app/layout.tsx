@@ -3,6 +3,8 @@ import { Inter } from "next/font/google";
 
 import { DashboardNav } from "@/components/DashboardNav";
 
+import { getApiKeyConfigError } from "@/lib/config";
+
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -17,6 +19,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const apiKeyError = getApiKeyConfigError();
+
   return (
     <html lang="en">
       <body className={`${inter.className} antialiased`}>
@@ -28,7 +32,19 @@ export default function RootLayout({
             <div className="border-b border-gray-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-950 md:hidden">
               <p className="font-bold text-indigo-600 dark:text-indigo-400">HVAC Intelligence</p>
             </div>
-            <div className="mx-auto max-w-7xl p-4 md:p-8">{children}</div>
+            <div className="mx-auto max-w-7xl p-4 md:p-8">
+              {apiKeyError ? (
+                <div
+                  role="alert"
+                  className="rounded-lg border border-red-200 bg-red-50 p-6 text-red-800"
+                >
+                  <p className="font-semibold">API configuration required</p>
+                  <p className="mt-2 text-sm">{apiKeyError}</p>
+                </div>
+              ) : (
+                children
+              )}
+            </div>
           </main>
         </div>
       </body>

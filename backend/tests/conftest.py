@@ -63,6 +63,9 @@ _DEFAULTS = {
     "REDIS_URL": "redis://localhost:6379/15",
     "MODEL_ARTIFACTS_PATH": "./ml/artifacts",
     "RAG_MOCK_INDEX_PATH": "data/knowledge/.mock_vector_index.json",
+    "DASHBOARD_API_KEY": "test-api-key-for-tests",
+    "ENVIRONMENT": "development",
+    "VAPI_WEBHOOK_HMAC_BYPASS": "false",
 }
 for _key, _value in _DEFAULTS.items():
     os.environ.setdefault(_key, _value)
@@ -537,7 +540,11 @@ async def api_client(
     app.dependency_overrides[deps.get_tool_executor] = override_tool_executor
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-API-Key": "test-api-key-for-tests"},
+    ) as client:
         yield client
 
     app.dependency_overrides.clear()

@@ -2,6 +2,7 @@ import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { CallHistorySection } from "@/components/CallHistorySection";
 import { ChurnTimelineChart } from "@/components/ChurnTimelineChart";
 import { RiskBadge } from "@/components/RiskBadge";
 import {
@@ -141,6 +142,8 @@ export default async function CustomerDetailPage({ params }: Props) {
           </Table>
         )}
       </Card>
+
+      <CallHistorySection customerId={params.id} />
 
       <Card>
         <Text>Open Tickets</Text>

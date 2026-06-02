@@ -1,6 +1,8 @@
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 # Project root .env (backend/app/core -> ../../../.env)
@@ -11,6 +13,13 @@ class Settings(BaseSettings):
     APP_NAME: str = "HVAC-Intelligence API"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
+    ENVIRONMENT: str = "development"
+
+    # Dashboard API authentication (required — no default; set in .env)
+    DASHBOARD_API_KEY: str
+
+    # Vapi webhook HMAC bypass — local dev only; ignored in production
+    VAPI_WEBHOOK_HMAC_BYPASS: bool = False
     
     # Database
     DATABASE_URL: str                    # postgresql+asyncpg://user:pass@host:5432/hvac_intel
@@ -50,6 +59,21 @@ class Settings(BaseSettings):
     RAG_EMBEDDING_MODEL: str = "text-embedding-3-small"
     RAG_EMBEDDING_DIM: int = 1536
     RAG_MMR_LAMBDA: float = 0.5
+
+    @model_validator(mode="after")
+    def validate_security_settings(self) -> "Settings":
+        if not self.DASHBOARD_API_KEY.strip():
+            raise ValueError(
+                "DASHBOARD_API_KEY must be set to a non-empty value. "
+                "Generate one with: openssl rand -hex 32"
+            )
+        if self.ENVIRONMENT == "production" and self.VAPI_WEBHOOK_HMAC_BYPASS:
+            warnings.warn(
+                "VAPI_WEBHOOK_HMAC_BYPASS is enabled but ignored in production. "
+                "Set VAPI_WEBHOOK_HMAC_BYPASS=false in production.",
+                stacklevel=2,
+            )
+        return self
 
     class Config:
         env_file = str(_ROOT_ENV_FILE)
