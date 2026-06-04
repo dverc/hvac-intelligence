@@ -113,7 +113,7 @@ async def test_graphql_query_uses_auth_header(db_session, encryption_key):
 
     headers = captured["headers"]
     assert headers["Authorization"] == "Bearer tok"
-    assert headers["X-JOBBER-GRAPHQL-VERSION"] == "2024-11-20"
+    assert headers["X-JOBBER-GRAPHQL-VERSION"] == "2025-04-16"
 
 
 @pytest.mark.asyncio

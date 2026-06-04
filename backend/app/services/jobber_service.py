@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 JOBBER_AUTHORIZE_URL = "https://api.getjobber.com/api/oauth/authorize"
 JOBBER_TOKEN_URL = "https://api.getjobber.com/api/oauth/token"
 JOBBER_GRAPHQL_URL = "https://api.getjobber.com/api/graphql"
-JOBBER_GRAPHQL_VERSION = "2024-11-20"
+JOBBER_GRAPHQL_VERSION = "2025-04-16"
 
 ACCOUNT_INFO_QUERY = """
 query {
@@ -223,7 +223,7 @@ class JobberService:
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json",
-                    "X-JOBBER-GRAPHQL-VERSION": "2024-11-20",
+                    "X-JOBBER-GRAPHQL-VERSION": JOBBER_GRAPHQL_VERSION,
                 },
                 json={"query": ACCOUNT_INFO_QUERY},
             )
