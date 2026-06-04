@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 import random
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -11,31 +12,19 @@ from sqlalchemy.orm import selectinload
 
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
+from app.models.organization import Organization
 from app.models.technician import Technician
+from app.schemas.organization import OrganizationSettings
 from app.schemas.tools import UpdateDispatchArgs
+from app.services.availability_service import AvailabilityService
+from app.services.google_calendar_service import GoogleCalendarService
+from app.services.window_parser import ParsedWindow, parse_preferred_window
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_job_number() -> str:
     return f"DX-{random.randint(1000, 9999)}"
-
-
-def _parse_preferred_window(preferred_window: str) -> tuple[datetime, datetime]:
-    """Map natural-language windows to UTC timestamps (simplified heuristic)."""
-    now = datetime.now(timezone.utc)
-    lower = preferred_window.lower()
-    if "tomorrow" in lower and "afternoon" in lower:
-        start = (now + timedelta(days=1)).replace(hour=13, minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=3)
-    elif "tomorrow" in lower or "next day" in lower:
-        start = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=2)
-    elif "today" in lower or "same day" in lower:
-        start = now + timedelta(hours=2)
-        end = start + timedelta(hours=2)
-    else:
-        start = (now + timedelta(days=2)).replace(hour=9, minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=4)
-    return start, end
 
 
 def _apply_retention_priority(
@@ -54,6 +43,14 @@ def _apply_retention_priority(
 class DispatchService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+        self.availability = AvailabilityService(db)
+
+    async def _get_org_timezone(self, org_id: uuid.UUID) -> str:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            return "America/Los_Angeles"
+        settings = OrganizationSettings.model_validate(org.settings or {})
+        return settings.timezone
 
     async def _select_technician(
         self, customer: Customer, org_id: uuid.UUID
@@ -103,12 +100,37 @@ class DispatchService:
 
         applied_priority, retention_flag = _apply_retention_priority(priority, churn_context)
         technician = await self._select_technician(customer, org_id)
-        window_start, window_end = _parse_preferred_window(preferred_window)
+        tz_name = await self._get_org_timezone(org_id)
+        parsed: ParsedWindow = parse_preferred_window(preferred_window, tz_name)
+
+        available, reason = await self.availability.check_slot_available(
+            org_id,
+            technician.technician_id,
+            parsed.slot_date,
+            parsed.start_time,
+            parsed.end_time,
+        )
+        if not available:
+            first_name = technician.full_name.split()[0]
+            return {
+                "success": False,
+                "error": "conflict",
+                "message": (
+                    f"{technician.full_name} is not available "
+                    f"{preferred_window}. {reason} "
+                    "Call check_availability to find open slots."
+                ),
+            }
+
+        window_start, window_end = parsed.to_datetimes(tz_name)
 
         job_number = _generate_job_number()
         for _ in range(5):
             existing = await self.db.execute(
-                select(DispatchJob).where(DispatchJob.job_number == job_number)
+                select(DispatchJob).where(
+                    DispatchJob.org_id == org_id,
+                    DispatchJob.job_number == job_number,
+                )
             )
             if existing.scalar_one_or_none() is None:
                 break
@@ -134,6 +156,21 @@ class DispatchService:
         )
         self.db.add(job)
         await self.db.flush()
+
+        gcal = GoogleCalendarService(self.db)
+        if await gcal.has_active_connection(org_id):
+            try:
+                event_id = await gcal.create_calendar_event(
+                    org_id, job, technician, customer
+                )
+                job.google_calendar_event_id = event_id
+                await self.db.flush()
+            except Exception as exc:
+                logger.exception(
+                    "Google Calendar event creation failed for job %s: %s",
+                    job.job_number,
+                    exc,
+                )
 
         tech_row = await self.db.execute(
             select(Technician).where(Technician.technician_id == technician.technician_id)
@@ -168,19 +205,34 @@ class DispatchService:
         self, args: UpdateDispatchArgs, org_id: uuid.UUID
     ) -> dict[str, Any]:
         job = await self.db.get(DispatchJob, uuid.UUID(args.job_id))
-        # Ownership check: a job from another org is treated as not found.
         if job is None or job.org_id != org_id:
             return {"success": False, "error": f"Dispatch job {args.job_id} not found"}
 
         changes: list[str] = []
         description = job.issue_description or ""
+        tz_name = await self._get_org_timezone(org_id)
 
         if args.cancel:
             job.job_status = "CANCELLED"
             changes.append("booking cancelled")
 
         if args.preferred_window:
-            window_start, window_end = _parse_preferred_window(args.preferred_window)
+            parsed = parse_preferred_window(args.preferred_window, tz_name)
+            if job.technician_id:
+                available, reason = await self.availability.check_slot_available(
+                    org_id,
+                    job.technician_id,
+                    parsed.slot_date,
+                    parsed.start_time,
+                    parsed.end_time,
+                )
+                if not available:
+                    return {
+                        "success": False,
+                        "error": "conflict",
+                        "message": reason,
+                    }
+            window_start, window_end = parsed.to_datetimes(tz_name)
             job.scheduled_window_start = window_start
             job.scheduled_window_end = window_end
             changes.append(f"window updated to {args.preferred_window}")
@@ -208,6 +260,29 @@ class DispatchService:
             }
 
         await self.db.flush()
+
+        if job.google_calendar_event_id:
+            gcal = GoogleCalendarService(self.db)
+            try:
+                if args.cancel:
+                    await gcal.delete_calendar_event(org_id, job.google_calendar_event_id)
+                else:
+                    tech = await self.db.get(Technician, job.technician_id)
+                    customer = await self.db.get(Customer, job.customer_id)
+                    if tech and customer:
+                        await gcal.update_calendar_event(
+                            org_id,
+                            job.google_calendar_event_id,
+                            job,
+                            tech,
+                            customer,
+                        )
+            except Exception as exc:
+                logger.exception(
+                    "Google Calendar sync failed for job %s: %s",
+                    job.job_number,
+                    exc,
+                )
 
         summary = ", ".join(changes)
         return {

@@ -66,6 +66,11 @@ _DEFAULTS = {
     "DASHBOARD_API_KEY": "test-api-key-for-tests",
     "ENVIRONMENT": "development",
     "VAPI_WEBHOOK_HMAC_BYPASS": "false",
+    "GOOGLE_CLIENT_ID": "test-google-client-id.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_SECRET": "test-google-secret",
+    "GOOGLE_OAUTH_REDIRECT_URI": "http://localhost:8000/api/v1/integrations/google/oauth/callback",
+    "GOOGLE_TOKEN_ENCRYPTION_KEY": "",
+    "FRONTEND_BASE_URL": "http://localhost:3000",
 }
 for _key, _value in _DEFAULTS.items():
     os.environ.setdefault(_key, _value)
@@ -342,6 +347,7 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
     from app.models.equipment import Equipment
     from app.models.support_ticket import SupportTicket
     from app.models.technician import Technician
+    from app.models.technician_schedule import TechnicianSchedule
 
     tech = Technician(
         org_id=SEED_ORG_ID,
@@ -352,6 +358,20 @@ async def seeded_customer(db_session: AsyncSession) -> dict[str, Any]:
         tenure_years=Decimal("5"),
     )
     db_session.add(tech)
+    await db_session.flush()
+
+    for dow in range(5):
+        db_session.add(
+            TechnicianSchedule(
+                org_id=SEED_ORG_ID,
+                technician_id=tech.technician_id,
+                day_of_week=dow,
+                start_time=datetime.strptime("08:00", "%H:%M").time(),
+                end_time=datetime.strptime("17:00", "%H:%M").time(),
+                is_active=True,
+                effective_from=date.today(),
+            )
+        )
     await db_session.flush()
 
     phone = f"+1555{uuid.uuid4().int % 100000000:08d}"

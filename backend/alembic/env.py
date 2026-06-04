@@ -18,9 +18,11 @@ from app.models import (  # noqa: F401
     Equipment,
     FeatureStore,
     Organization,
+    ScheduleOverride,
     ServiceCatalog,
     SupportTicket,
     Technician,
+    TechnicianSchedule,
 )
 
 config = context.config

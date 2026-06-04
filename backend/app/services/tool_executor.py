@@ -15,6 +15,7 @@ from app.rag.retriever import RAGRetriever
 from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
 from app.schemas.organization import OrganizationSettings
 from app.schemas.tools import (
+    CheckAvailabilityArgs,
     CreateCustomerArgs,
     CreateEquipmentArgs,
     CreateSupportTicketArgs,
@@ -27,6 +28,7 @@ from app.schemas.tools import (
     UpdateCustomerArgs,
     UpdateDispatchArgs,
 )
+from app.services.availability_service import AvailabilityService
 from app.services.churn_service import ChurnService
 from app.services.customer_service import CustomerService
 from app.services.dispatch_service import DispatchService
@@ -37,6 +39,7 @@ from app.services.service_catalog_service import (
     format_price_range,
 )
 from app.services.ticket_service import TicketService
+from app.services.window_parser import parse_date_range
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,7 @@ TOOL_REGISTRY: dict[str, str] = {
     "create_equipment": "execute_create_equipment",
     "update_dispatch": "execute_update_dispatch",
     "lookup_service_info": "execute_lookup_service_info",
+    "check_availability": "execute_check_availability",
 }
 
 
@@ -99,6 +103,7 @@ class ToolExecutor:
         ticket_service: TicketService,
         rag_retriever: RAGRetriever,
         service_catalog_service: ServiceCatalogService | None = None,
+        availability_service: AvailabilityService | None = None,
     ) -> None:
         self.customer_service = customer_service
         self.dispatch_service = dispatch_service
@@ -106,6 +111,9 @@ class ToolExecutor:
         self.ticket_service = ticket_service
         self.rag_retriever = rag_retriever
         self.service_catalog_service = service_catalog_service or ServiceCatalogService(
+            customer_service.db
+        )
+        self.availability_service = availability_service or AvailabilityService(
             customer_service.db
         )
         # Tenant context — MUST be set (set_tenant) before any handler runs.
@@ -192,7 +200,69 @@ class ToolExecutor:
             access_instructions=parsed.access_instructions,
             churn_context=churn_ctx,
         )
+        if not result.get("success", True):
+            return json.dumps(result)
         return json.dumps(result)
+
+    async def execute_check_availability(self, **kwargs: Any) -> str:
+        parsed = CheckAvailabilityArgs.model_validate(kwargs)
+        tz_name = (
+            self.org_settings.timezone
+            if self.org_settings is not None
+            else "America/Los_Angeles"
+        )
+        date_start, date_end = parse_date_range(
+            parsed.preferred_date,
+            parsed.num_days_to_check,
+            tz_name,
+        )
+        preferred_tech = (
+            uuid.UUID(parsed.preferred_technician_id)
+            if parsed.preferred_technician_id
+            else None
+        )
+        slots = await self.availability_service.get_available_slots(
+            org_id=self.org_id,
+            date_range_start=date_start,
+            date_range_end=date_end,
+            duration_minutes=parsed.duration_minutes,
+            preferred_technician_id=preferred_tech,
+        )
+        if not slots:
+            return json.dumps(
+                {
+                    "available_slots": [],
+                    "message": (
+                        "I couldn't find any open appointment slots in that time range. "
+                        "Would you like me to check further out, or would you prefer "
+                        "to call back later?"
+                    ),
+                }
+            )
+
+        formatted = [
+            {
+                "slot_label": slot.slot_label,
+                "technician": slot.technician_name.split()[0],
+                "technician_id": str(slot.technician_id),
+                "date": slot.date.isoformat(),
+                "start_time": slot.start_time.strftime("%H:%M"),
+                "end_time": slot.end_time.strftime("%H:%M"),
+            }
+            for slot in slots
+        ]
+        earliest = formatted[0]
+        count = len(formatted)
+        return json.dumps(
+            {
+                "available_slots": formatted,
+                "message": (
+                    f"I found {count} available slot{'s' if count != 1 else ''}. "
+                    f"The earliest is {earliest['slot_label']} with "
+                    f"{earliest['technician']}. Which works best for you?"
+                ),
+            }
+        )
 
     async def execute_query_churn_score(self, **kwargs: Any) -> str:
         customer_id = kwargs.get("customer_id", "")

@@ -270,6 +270,43 @@ Look up exact service pricing, duration, and descriptions from the tenant servic
 
 ---
 
+## check_availability
+
+Check real technician availability before confirming a booking. Call this before schedule_dispatch when the caller asks about appointment times.
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "check_availability",
+    "description": "Find open appointment slots for HVAC service visits. Use when the caller asks about availability, timing, or 'when can someone come out'. Always call this before schedule_dispatch to offer specific slots.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "preferred_date": {
+          "type": "string",
+          "description": "Natural language date preference: 'tomorrow', 'Monday', 'next week', or ISO date YYYY-MM-DD. Omit to start from tomorrow."
+        },
+        "duration_minutes": {
+          "type": "integer",
+          "description": "Expected job duration in minutes. Default 60."
+        },
+        "preferred_technician_id": {
+          "type": "string",
+          "description": "Optional UUID to check a specific technician only."
+        },
+        "num_days_to_check": {
+          "type": "integer",
+          "description": "How many days ahead to search (1-7). Default 3."
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Identity confirmation (system prompt — no tool)
 
 On **call-start**, the backend injects identity confirmation instructions when a phone match is found. No dashboard change required — ensure the assistant system prompt allows following injected context from `assistantOverrides.model.systemPrompt`.

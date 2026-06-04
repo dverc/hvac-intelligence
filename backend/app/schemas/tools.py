@@ -61,6 +61,13 @@ class LookupServiceInfoArgs(BaseModel):
         return self
 
 
+class CheckAvailabilityArgs(BaseModel):
+    preferred_date: Optional[str] = None
+    duration_minutes: int = Field(default=60, ge=30, le=480)
+    preferred_technician_id: Optional[str] = None
+    num_days_to_check: int = Field(default=3, ge=1, le=7)
+
+
 class CreateSupportTicketArgs(BaseModel):
     customer_id: str
     ticket_type: Literal[

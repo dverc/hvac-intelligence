@@ -11,7 +11,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.api.v1 import api_router, vapi_router
+from app.api.v1 import api_router, google_oauth_router, vapi_router
 from app.core.auth import request_has_valid_api_key, verify_api_key
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -83,6 +83,7 @@ async def health() -> dict[str, str]:
 
 
 app.include_router(vapi_router)
+app.include_router(google_oauth_router)
 app.include_router(api_router, dependencies=[Depends(verify_api_key)])
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)

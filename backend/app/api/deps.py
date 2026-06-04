@@ -60,12 +60,28 @@ async def get_knowledge_service(db: AsyncSession = Depends(get_db)) -> "Knowledg
     return KnowledgeService(db)
 
 
+async def get_availability_service(
+    db: AsyncSession = Depends(get_db),
+) -> "AvailabilityService":
+    from app.services.availability_service import AvailabilityService
+
+    return AvailabilityService(db)
+
+
 async def get_service_catalog_service(
     db: AsyncSession = Depends(get_db),
 ) -> "ServiceCatalogService":
     from app.services.service_catalog_service import ServiceCatalogService
 
     return ServiceCatalogService(db)
+
+
+async def get_google_calendar_service(
+    db: AsyncSession = Depends(get_db),
+) -> "GoogleCalendarService":
+    from app.services.google_calendar_service import GoogleCalendarService
+
+    return GoogleCalendarService(db)
 
 
 async def get_tool_executor(

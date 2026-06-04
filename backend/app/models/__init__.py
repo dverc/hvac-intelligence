@@ -5,10 +5,13 @@ from app.models.dispatch_job import DispatchJob
 from app.models.document_registry import DocumentRegistry
 from app.models.equipment import Equipment
 from app.models.feature_store import FeatureStore
+from app.models.google_calendar_token import GoogleCalendarToken
 from app.models.organization import Organization
+from app.models.schedule_override import ScheduleOverride
 from app.models.service_catalog import ServiceCatalog
 from app.models.support_ticket import SupportTicket
 from app.models.technician import Technician
+from app.models.technician_schedule import TechnicianSchedule
 
 __all__ = [
     "CallTranscript",
@@ -18,8 +21,11 @@ __all__ = [
     "DocumentRegistry",
     "Equipment",
     "FeatureStore",
+    "GoogleCalendarToken",
     "Organization",
+    "ScheduleOverride",
     "ServiceCatalog",
     "SupportTicket",
     "Technician",
+    "TechnicianSchedule",
 ]

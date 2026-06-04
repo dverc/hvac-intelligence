@@ -90,6 +90,7 @@ class DispatchJob(Base):
     scheduled_window_end: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    google_calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255))
     actual_arrival: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     actual_completion: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     resolution_notes: Mapped[Optional[str]] = mapped_column(Text)

@@ -68,6 +68,21 @@ class Settings(BaseSettings):
     RAG_EMBEDDING_DIM: int = 1536
     RAG_MMR_LAMBDA: float = 0.5
 
+    # Google Calendar OAuth (secrets in .env only — never commit)
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_OAUTH_REDIRECT_URI: str = (
+        "http://localhost:8000/api/v1/integrations/google/oauth/callback"
+    )
+    GOOGLE_CALENDAR_SCOPES: list[str] = [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+    ]
+    GOOGLE_TOKEN_ENCRYPTION_KEY: str = ""
+    FRONTEND_BASE_URL: str = "http://localhost:3000"
+
     @model_validator(mode="after")
     def validate_security_settings(self) -> "Settings":
         if not self.DASHBOARD_API_KEY.strip():

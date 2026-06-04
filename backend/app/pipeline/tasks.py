@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -17,6 +18,8 @@ from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
 from app.models.feature_store import FeatureStore
+from app.models.google_calendar_token import GoogleCalendarToken
+from app.models.organization import Organization
 from app.models.technician import Technician
 from app.pipeline.celery_app import celery_app
 from app.core.metrics import saved_by_ai_counter
@@ -362,3 +365,120 @@ def _count_tier(session, tier: str) -> int:
             if prob < 0.35:
                 count += 1
     return count
+
+
+@celery_app.task(name="app.pipeline.tasks.sync_technician_schedules")
+def sync_technician_schedules() -> dict[str, Any]:
+    """Advance stale SCHEDULED jobs whose window has passed (FSM sync foundation)."""
+    session = get_sync_session()
+    try:
+        now = datetime.now(timezone.utc)
+        orgs = session.scalars(
+            select(Organization).where(Organization.is_active.is_(True))
+        ).all()
+        summaries: list[str] = []
+        total_updated = 0
+
+        for org in orgs:
+            jobs = session.scalars(
+                select(DispatchJob).where(
+                    DispatchJob.org_id == org.org_id,
+                    DispatchJob.job_status == "SCHEDULED",
+                    DispatchJob.scheduled_window_start.isnot(None),
+                    DispatchJob.scheduled_window_start < now,
+                )
+            ).all()
+            updated = 0
+            for job in jobs:
+                job.job_status = "IN_PROGRESS"
+                updated += 1
+            if updated:
+                summaries.append(f"{org.org_name} — {updated} jobs updated")
+                logger.info(
+                    "Schedule sync: %s — %s jobs updated", org.org_name, updated
+                )
+            total_updated += updated
+
+        session.commit()
+        return {
+            "status": "ok",
+            "jobs_updated": total_updated,
+            "summaries": summaries,
+        }
+    except Exception as exc:
+        session.rollback()
+        logger.exception("sync_technician_schedules failed: %s", exc)
+        raise
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.pipeline.tasks.sync_google_calendars")
+def sync_google_calendars() -> dict[str, Any]:
+    """Sync external Google Calendar events into schedule overrides (Phase 8A)."""
+    return asyncio.run(_sync_google_calendars_async())
+
+
+async def _sync_google_calendars_async() -> dict[str, Any]:
+    from app.core.database import get_session_factory
+    from app.services.google_calendar_service import GoogleCalendarService
+
+    date_from = date.today()
+    date_to = date_from + timedelta(days=14)
+    summaries: list[str] = []
+    total_synced = 0
+
+    async with get_session_factory()() as session:
+        try:
+            tokens = (
+                await session.execute(
+                    select(GoogleCalendarToken).where(
+                        GoogleCalendarToken.is_active.is_(True),
+                        GoogleCalendarToken.technician_id.isnot(None),
+                    )
+                )
+            ).scalars().all()
+
+            gcal = GoogleCalendarService(session)
+            org_counts: dict[uuid.UUID, int] = {}
+
+            for token in tokens:
+                if token.technician_id is None:
+                    continue
+                try:
+                    count = await gcal.sync_calendar_to_availability(
+                        token.org_id,
+                        token.technician_id,
+                        date_from,
+                        date_to,
+                    )
+                    org_counts[token.org_id] = org_counts.get(token.org_id, 0) + count
+                    total_synced += count
+                except Exception as exc:
+                    logger.warning(
+                        "GCal sync failed for org=%s tech=%s: %s",
+                        token.org_id,
+                        token.technician_id,
+                        exc,
+                    )
+
+            org_names: dict[uuid.UUID, str] = {}
+            for org_id in org_counts:
+                org = await session.get(Organization, org_id)
+                org_names[org_id] = org.org_name if org else str(org_id)
+
+            for org_id, count in org_counts.items():
+                name = org_names.get(org_id, str(org_id))
+                summaries.append(f"GCal sync: {name} — {count} events synced")
+                logger.info("GCal sync: %s — %s events synced", name, count)
+
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+    return {
+        "status": "ok",
+        "events_synced": total_synced,
+        "summaries": summaries,
+    }

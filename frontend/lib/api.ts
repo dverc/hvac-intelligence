@@ -364,6 +364,137 @@ export function updateServiceItem(
   );
 }
 
+// ── Scheduling / dispatch ─────────────────────────────────────────────────────
+
+export interface ScheduledJob {
+  job_id: string;
+  job_number: string;
+  customer_id: string;
+  customer_name: string;
+  issue_type: string;
+  issue_description?: string;
+  technician_id?: string;
+  technician_name?: string;
+  priority: string;
+  job_status: string;
+  scheduled_window_start?: string;
+  scheduled_window_end?: string;
+}
+
+export interface ScheduledJobsResponse {
+  org_id: string;
+  total: number;
+  items: ScheduledJob[];
+}
+
+export interface AvailabilitySlot {
+  date: string;
+  start_time: string;
+  end_time: string;
+  technician_id: string;
+  technician_name: string;
+  slot_label: string;
+}
+
+export function getScheduledJobs(
+  dateFrom: string,
+  dateTo: string,
+  technicianId?: string,
+  status?: string,
+) {
+  return apiGet<ScheduledJobsResponse>("/api/v1/scheduling/jobs", {
+    date_from: dateFrom,
+    date_to: dateTo,
+    technician_id: technicianId,
+    status,
+  });
+}
+
+export function getAvailability(
+  dateFrom: string,
+  dateTo: string,
+  technicianId?: string,
+  durationMinutes = 60,
+) {
+  return apiGet<AvailabilitySlot[]>("/api/v1/scheduling/availability", {
+    date_from: dateFrom,
+    date_to: dateTo,
+    technician_id: technicianId,
+    duration_minutes: durationMinutes,
+  });
+}
+
+// ── Integrations (Google Calendar) ──────────────────────────────────────────
+
+export type GoogleCalendarEntry = {
+  token_id?: string;
+  email: string;
+  calendar_id: string;
+  technician_id: string | null;
+  is_active: boolean;
+  token_expiry?: string | null;
+};
+
+export type GoogleCalendarStatus = {
+  connected: boolean;
+  calendars: GoogleCalendarEntry[];
+};
+
+export function getGoogleCalendarStatus(orgId: string) {
+  return apiGet<GoogleCalendarStatus>("/api/v1/integrations/google/status", {
+    org_id: orgId,
+  });
+}
+
+export function getGoogleConnectUrl(orgId: string, technicianId?: string) {
+  return apiGet<{ authorization_url: string }>(
+    "/api/v1/integrations/google/connect",
+    { org_id: orgId, technician_id: technicianId },
+  );
+}
+
+export function syncGoogleCalendar(
+  orgId: string,
+  technicianId: string,
+  dateFrom: string,
+  dateTo: string,
+) {
+  void orgId;
+  return apiPostJson<{ synced: number }>("/api/v1/integrations/google/sync", {
+    technician_id: technicianId,
+    date_from: dateFrom,
+    date_to: dateTo,
+  });
+}
+
+export function disconnectGoogleCalendar(orgId: string, email: string) {
+  void orgId;
+  return apiDeleteJson<{ disconnected: boolean }>(
+    "/api/v1/integrations/google/disconnect",
+    { google_account_email: email },
+  );
+}
+
+async function apiDeleteJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    method: "DELETE",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...apiKeyHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, `DELETE ${path} failed: ${body}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 // ── SSE (dashboard real-time) ───────────────────────────────────────────────
 
 /** URL for EventSource — not a JSON fetch. Auth via query param (SSE cannot set headers). */

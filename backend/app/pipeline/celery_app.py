@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import get_settings
 
@@ -22,6 +23,20 @@ celery_app.conf.update(
         "app.pipeline.tasks.process_call_features": {"queue": "features"},
     },
     imports=("app.pipeline.tasks",),
+    beat_schedule={
+        "sync-technician-schedules": {
+            "task": "app.pipeline.tasks.sync_technician_schedules",
+            "schedule": crontab(minute=0, hour="*/2"),
+        },
+        "batch-rescore-customers": {
+            "task": "app.pipeline.tasks.batch_rescore_customers",
+            "schedule": crontab(minute=0, hour=2),
+        },
+        "sync-google-calendars": {
+            "task": "app.pipeline.tasks.sync_google_calendars",
+            "schedule": crontab(minute=0, hour="*/4"),
+        },
+    },
 )
 
 
