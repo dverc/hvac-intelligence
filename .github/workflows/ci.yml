@@ -29,9 +29,9 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       MODEL_ARTIFACTS_PATH: ../ml/artifacts
       RAG_MOCK_INDEX_PATH: ../data/knowledge/.mock_vector_index.json
-      DASHBOARD_API_KEY: test-dashboard-api-key-for-ci
+      DASHBOARD_API_KEY: test-api-key-for-tests
       ENVIRONMENT: test
-      VAPI_WEBHOOK_HMAC_BYPASS: "true"
+      VAPI_WEBHOOK_HMAC_BYPASS: "false"
       DASHBOARD_ORG_ID: 00000000-0000-4000-8000-000000000001
       VAPI_PHONE_NUMBER: "+19498800687"
       GOOGLE_CLIENT_ID: test-google-client-id
