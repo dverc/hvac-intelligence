@@ -27,7 +27,7 @@ def tool_executor(db_session, mock_rag_retriever):
         rag_retriever=mock_rag_retriever,
     )
     # Tenant must be set before handlers run (mirrors webhook resolution).
-    executor.set_tenant(SEED_ORG_ID)
+    executor.set_tenant(SEED_ORG_ID, org_slug="hvac-demo")
     return executor
 
 
@@ -149,7 +149,7 @@ async def test_rag_knowledge_query_calls_retriever(tool_executor, seeded_custome
     )
     mock_retriever.retrieve.assert_awaited_once_with(
         query="What is the warranty on a Carrier AC?",
-        namespace="faq_general",
+        namespace="hvac-demo::faq_general",
         top_k=3,
         filter_model=None,
     )

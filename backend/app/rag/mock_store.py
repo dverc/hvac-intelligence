@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from app.rag.constants import get_base_namespace
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,6 +112,25 @@ class LocalMockVectorStore:
             ns = record.get("namespace")
             if ns in counts:
                 counts[ns] += 1
+        return counts
+
+    def count_by_org_prefix(self, org_slug: str, base_namespaces: list[str]) -> dict[str, int]:
+        counts = {base: 0 for base in base_namespaces}
+        prefix = f"{org_slug}::"
+        for record in self._records:
+            ns = record.get("namespace") or ""
+            if ns.startswith(prefix):
+                base = get_base_namespace(ns)
+                if base in counts:
+                    counts[base] += 1
+        return counts
+
+    def count_by_base_namespaces(self, base_namespaces: list[str]) -> dict[str, int]:
+        counts = {base: 0 for base in base_namespaces}
+        for record in self._records:
+            base = get_base_namespace(record.get("namespace") or "")
+            if base in counts:
+                counts[base] += 1
         return counts
 
     def delete_by_id_prefix(self, namespace: str, prefix: str) -> int:

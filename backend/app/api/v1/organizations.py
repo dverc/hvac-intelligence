@@ -4,13 +4,15 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.models.organization import Organization
+from app.models.customer import Customer
 from app.schemas.organization import (
     OrganizationCreate,
+    OrganizationListOut,
     OrganizationOut,
     OrganizationUpdate,
 )
@@ -34,14 +36,45 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-@router.get("", response_model=list[OrganizationOut])
+@router.get("", response_model=list[OrganizationListOut])
 async def list_organizations(
     db: AsyncSession = Depends(get_db),
-) -> list[Organization]:
-    rows = (
-        await db.execute(select(Organization).order_by(Organization.org_name))
-    ).scalars().all()
-    return list(rows)
+) -> list[OrganizationListOut]:
+    counts_subq = (
+        select(
+            Customer.org_id,
+            func.count(Customer.customer_id).label("customer_count"),
+        )
+        .group_by(Customer.org_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            Organization,
+            func.coalesce(counts_subq.c.customer_count, 0).label("customer_count"),
+        )
+        .outerjoin(counts_subq, Organization.org_id == counts_subq.c.org_id)
+        .order_by(Organization.org_name)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        OrganizationListOut(
+            org_id=org.org_id,
+            org_name=org.org_name,
+            slug=org.slug,
+            industry=org.industry,
+            business_phone=org.business_phone,
+            vapi_assistant_id=org.vapi_assistant_id,
+            vapi_phone_number_id=org.vapi_phone_number_id,
+            plan_tier=org.plan_tier,
+            is_active=org.is_active,
+            settings=org.settings or {},
+            created_at=org.created_at,
+            updated_at=org.updated_at,
+            customer_count=int(customer_count or 0),
+        )
+        for org, customer_count in rows
+    ]
 
 
 @router.get("/{org_id}", response_model=OrganizationOut)

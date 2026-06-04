@@ -13,6 +13,8 @@ const NAV_ITEMS = [
   { href: "/dashboard/import", label: "Import" },
   { href: "/dashboard/dispatch", label: "Dispatch" },
   { href: "/dashboard/integrations", label: "Integrations" },
+  { href: "/dashboard/admin", label: "Admin" },
+  { href: "/dashboard/health", label: "System Health" },
 ];
 
 export function DashboardNav() {

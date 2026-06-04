@@ -26,7 +26,7 @@ def tool_executor(db_session, mock_rag_retriever):
         ticket_service=TicketService(db_session),
         rag_retriever=mock_rag_retriever,
     )
-    executor.set_tenant(SEED_ORG_ID)
+    executor.set_tenant(SEED_ORG_ID, org_slug="hvac-demo")
     return executor
 
 

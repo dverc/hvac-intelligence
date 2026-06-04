@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import observe_tool_execution
+from app.rag.constants import get_base_namespace, get_namespace
 from app.rag.retriever import RAGRetriever
 from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
 from app.schemas.organization import OrganizationSettings
@@ -118,12 +119,17 @@ class ToolExecutor:
         )
         # Tenant context — MUST be set (set_tenant) before any handler runs.
         self.org_id: uuid.UUID | None = None
+        self.org_slug: str | None = None
         self.org_settings: OrganizationSettings | None = None
 
     def set_tenant(
-        self, org_id: uuid.UUID, settings: OrganizationSettings | None = None
+        self,
+        org_id: uuid.UUID,
+        settings: OrganizationSettings | None = None,
+        org_slug: str | None = None,
     ) -> None:
         self.org_id = org_id
+        self.org_slug = org_slug
         self.org_settings = settings
 
     @property
@@ -328,12 +334,19 @@ class ToolExecutor:
 
     async def execute_rag_query(self, **kwargs: Any) -> str:
         parsed = RagKnowledgeQueryArgs.model_validate(kwargs)
-        namespace = parsed.namespace_override or parsed.namespace
-        if namespace is None and self.org_settings is not None:
-            namespace = self.org_settings.pinecone_namespace
+        base_namespace = parsed.namespace_override or parsed.namespace
+        if base_namespace is None and self.org_settings is not None:
+            base_namespace = self.org_settings.pinecone_namespace
+        if base_namespace is None:
+            base_namespace = "faq_general"
+        base_namespace = get_base_namespace(base_namespace)
+        if self.org_slug:
+            query_namespace = get_namespace(self.org_slug, base_namespace)
+        else:
+            query_namespace = base_namespace
         chunks = await self.rag_retriever.retrieve(
             query=parsed.query,
-            namespace=namespace,
+            namespace=query_namespace,
             top_k=parsed.top_k,
             filter_model=parsed.equipment_model,
         )

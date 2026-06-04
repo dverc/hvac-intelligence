@@ -1,5 +1,55 @@
 # HVAC Intelligence (Project Aero) — Operations Runbook
 
+## Startup sequence (local)
+
+1. `docker compose up -d postgres redis` (add `celery-worker` for background tasks).
+2. `cd backend && alembic upgrade head`
+3. `python scripts/seed_database.py` (repo root)
+4. Optional: `python backend/scripts/migrate_pinecone_namespaces.py --mock`
+5. `cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+6. `cd frontend && npm run dev`
+7. Optional tunnel: `ngrok http 8000` for Vapi/Google/Jobber OAuth callbacks.
+
+If port 8000 is in use: `lsof -ti:8000 | xargs kill -9`
+
+## Restart after a crash
+
+1. Stop uvicorn/frontend (Ctrl+C or kill port 8000 / 3000).
+2. `docker compose restart postgres redis`
+3. Re-run migrations if schema changed: `cd backend && alembic upgrade head`
+4. Start API and frontend again (steps 5–6 above).
+
+## Database backup
+
+```bash
+docker compose exec -T postgres pg_dump -U hvac_user hvac_intel > backup_$(date +%Y%m%d).sql
+```
+
+Restore: `docker compose exec -T postgres psql -U hvac_user hvac_intel < backup.sql`
+
+## Seed a new tenant
+
+Prefer the UI: `/dashboard/onboarding`. API alternative:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/organizations \
+  -H "X-API-Key: $DASHBOARD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"org_name":"Acme HVAC","slug":"acme-hvac","industry":"hvac","business_phone":"+15551234567"}'
+```
+
+## Celery Beat schedules (5 tasks)
+
+| Task | Schedule |
+|------|----------|
+| `sync_technician_schedules` | Every 2 hours |
+| `batch_rescore_customers` | Daily 02:00 UTC |
+| `sync_google_calendars` | Every 4 hours |
+| `sync_jobber_data` | Every 6 hours |
+| `sync_google_drive_folders` | Every 30 minutes |
+
+Start beat: `cd backend && celery -A app.pipeline.celery_app beat --loglevel=info`
+
 ## Local development (end-to-end)
 
 1. Copy environment template and set secrets:
@@ -134,6 +184,10 @@ Useful queries:
 | Alembic fails on `vector` | pgvector missing | Use `pgvector/pgvector:pg16` image (compose/K8s Postgres). |
 | Tests fail in CI | DB not migrated | Ensure `alembic upgrade head` before `pytest`; `hvac_intel_test` DB exists. |
 | Frontend cannot reach API | Wrong `NEXT_PUBLIC_API_BASE_URL` | Set to public API origin at **build** time (Docker `ARG` / Vercel env). |
+| `ValidationError: DASHBOARD_API_KEY` | Missing env in CI/local | Set in `.env` and GitHub Actions `ci.yml` job env. |
+| `connection refused` Postgres | Docker not running | `docker compose up -d postgres`; check `DATABASE_URL` host/port. |
+| Celery worker missing | Service not started | `docker compose up -d celery-worker` or run worker manually. |
+| Jobber/Google OAuth fails | Stale tunnel URL | Update redirect URIs in provider console to match ngrok host. |
 
 ---
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.config import Settings, get_settings
 from app.rag.chunker import DocumentChunk, split_markdown_file, split_text
-from app.rag.constants import RAG_NAMESPACES
+from app.rag.constants import RAG_NAMESPACES, get_base_namespace, is_valid_base_namespace
 from app.rag.embedder import get_embedder
 from app.rag.mock_store import LocalMockVectorStore
 
@@ -65,7 +65,7 @@ class KnowledgeIndexer:
             return 0
 
         namespace = chunks[0].namespace
-        if namespace not in RAG_NAMESPACES:
+        if not is_valid_base_namespace(namespace):
             raise ValueError(f"Invalid namespace: {namespace}")
 
         texts = [c.text for c in chunks]
@@ -99,7 +99,7 @@ class KnowledgeIndexer:
         return len(chunks)
 
     async def delete_by_id_prefix(self, namespace: str, prefix: str) -> int:
-        if namespace not in RAG_NAMESPACES:
+        if not is_valid_base_namespace(namespace):
             raise ValueError(f"Invalid namespace: {namespace}")
         if self._use_mock:
             assert self._mock_store is not None
@@ -135,18 +135,29 @@ class KnowledgeIndexer:
                 break
             pagination_token = pagination_token.next
 
-    def get_namespace_counts(self) -> dict[str, int]:
+    def get_namespace_counts(self, org_slug: str | None = None) -> dict[str, int]:
+        """Return vector counts keyed by base namespace (optionally scoped to one org)."""
         if self._use_mock:
             assert self._mock_store is not None
-            return self._mock_store.count_by_namespaces(sorted(RAG_NAMESPACES))
+            if org_slug:
+                return self._mock_store.count_by_org_prefix(
+                    org_slug, sorted(RAG_NAMESPACES)
+                )
+            return self._mock_store.count_by_base_namespaces(sorted(RAG_NAMESPACES))
+
         assert self._pinecone_index is not None
         stats = self._pinecone_index.describe_index_stats()
         ns_stats = getattr(stats, "namespaces", None) or {}
-        return {
-            ns: int(getattr(info, "vector_count", 0) or info.get("vector_count", 0))
-            for ns, info in ns_stats.items()
-            if ns in RAG_NAMESPACES
-        }
+        counts = {base: 0 for base in RAG_NAMESPACES}
+        for ns, info in ns_stats.items():
+            base = get_base_namespace(ns)
+            if base not in RAG_NAMESPACES:
+                continue
+            if org_slug and not ns.startswith(f"{org_slug}::"):
+                continue
+            count = int(getattr(info, "vector_count", 0) or info.get("vector_count", 0))
+            counts[base] = counts.get(base, 0) + count
+        return counts
 
     async def index_directory(
         self,

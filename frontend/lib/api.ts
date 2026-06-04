@@ -542,6 +542,72 @@ export function disconnectJobber(orgId: string) {
   );
 }
 
+// ── Organizations (admin) ───────────────────────────────────────────────────
+
+export type OrganizationRecord = {
+  org_id: string;
+  org_name: string;
+  slug: string;
+  industry: string;
+  business_phone: string | null;
+  vapi_assistant_id: string | null;
+  vapi_phone_number_id: string | null;
+  plan_tier: string;
+  is_active: boolean;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  customer_count?: number;
+};
+
+export type OrganizationCreatePayload = {
+  org_name: string;
+  slug: string;
+  industry: string;
+  business_phone?: string;
+  vapi_assistant_id?: string;
+  vapi_phone_number_id?: string;
+  plan_tier?: string;
+  is_active?: boolean;
+  settings?: Record<string, unknown>;
+};
+
+export function getOrganizations() {
+  return apiGet<OrganizationRecord[]>("/api/v1/organizations");
+}
+
+export function createOrganization(data: OrganizationCreatePayload) {
+  return apiPostJson<OrganizationRecord>("/api/v1/organizations", data);
+}
+
+export function updateOrganizationSettings(
+  orgId: string,
+  settings: Record<string, unknown>,
+) {
+  return apiPatchJson<OrganizationRecord>(`/api/v1/organizations/${orgId}`, {
+    settings,
+  });
+}
+
+export type SystemHealthResponse = {
+  status: "healthy" | "degraded" | "unhealthy";
+  timestamp: string;
+  components: Record<
+    string,
+    { status: string; latency_ms?: number; vector_count?: number; last_call_at?: string; error?: string }
+  >;
+  metrics: {
+    total_organizations: number;
+    total_customers: number;
+    total_calls_today: number;
+    total_dispatch_jobs_open: number;
+  };
+};
+
+export function getSystemHealth() {
+  return apiGet<SystemHealthResponse>("/api/v1/system/health");
+}
+
 // ── Data import (CSV + Google Drive) ────────────────────────────────────────
 
 export type CsvImportResult = {

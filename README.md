@@ -16,6 +16,8 @@ Project Aero is a production-shaped HVAC operations platform that couples a low-
 
 The voice path never blocks on ML inference. Call-end events publish to Kafka (`call.features`); Celery workers extract features, upsert `feature_store`, and write `churn_scores` asynchronously. A Next.js dashboard consumes REST analytics and an SSE churn-event stream so operators see risk movement, cohorts, and retention outcomes in near real time.
 
+Multi-tenant organizations isolate data in PostgreSQL and Pinecone (`{org_slug}::{namespace}`). New business clients can be onboarded via `/dashboard/onboarding` (CSV import, knowledge upload, Google Drive sync, agent settings) without engineering involvement.
+
 ---
 
 ## Architecture
@@ -128,6 +130,7 @@ The voice path never blocks on ML inference. Call-end events publish to Kafka (`
    | `OPENAI_API_KEY` | Settings validation |
    | `VAPI_API_KEY`, `VAPI_WEBHOOK_SECRET`, `VAPI_ASSISTANT_ID` | Webhook HMAC + Vapi integration |
    | `PINECONE_API_KEY`, `PINECONE_ENVIRONMENT` | Settings validation |
+   | `DASHBOARD_API_KEY` | Dashboard + admin API authentication |
    | `REDIS_URL` | Celery broker |
    | `KAFKA_BOOTSTRAP_SERVERS` | Feature pipeline (dev falls back to direct Celery if broker is down) |
 
@@ -148,6 +151,38 @@ The voice path never blocks on ML inference. Call-end events publish to Kafka (`
 8. **Dashboard:** `cd frontend && npm install && npm run dev`
 
 **Dashboard at http://localhost:3000 · API docs at http://localhost:8000/docs**
+
+Set `NEXT_PUBLIC_API_KEY` in `frontend/.env.local` to the same value as `DASHBOARD_API_KEY`.
+
+### Dashboard routes
+
+| Route | Purpose |
+|-------|---------|
+| `/dashboard` | Overview |
+| `/dashboard/customers` | Customer list & profiles |
+| `/dashboard/analytics` | Churn analytics |
+| `/dashboard/knowledge` | Knowledge base & service catalog |
+| `/dashboard/dispatch` | Dispatch board |
+| `/dashboard/integrations` | Google Calendar + Jobber |
+| `/dashboard/import` | CSV import + Drive sync |
+| `/dashboard/admin` | All organizations (super-admin) |
+| `/dashboard/onboarding` | Guided new-client wizard |
+| `/dashboard/health` | System health & metrics |
+
+### Onboard a new business client
+
+1. Open `/dashboard/onboarding` (or **Onboard New Client** on `/dashboard/admin`).
+2. Create the organization (business phone maps to Vapi tenant routing).
+3. Import customers/equipment via CSV (optional).
+4. Upload knowledge documents or connect Google Drive.
+5. Configure agent prompt, first message, and issue taxonomy.
+6. Add the 12 Vapi tools listed on the completion screen (`docs/vapi_tool_schemas.md`).
+
+Re-index existing mock vectors after upgrading from flat namespaces:
+
+```bash
+cd backend && python scripts/migrate_pinecone_namespaces.py --mock
+```
 
 For the full stack (Kafka, Celery, Prometheus, Grafana): `docker compose up --build`. See [`docs/RUNBOOK.md`](./docs/RUNBOOK.md).
 
@@ -186,6 +221,7 @@ For the full stack (Kafka, Celery, Prometheus, Grafana): `docker compose up --bu
 - **Lexicon-based `classify_emotions()` instead of a second transformer** — Deterministic, fast, and testable on every utterance; DistilBERT handles document-level sentiment only.
 - **PostgreSQL views for `age_years` / `tenure_years` (Option C)** — Generated columns cannot call `NOW()` in PostgreSQL; views compute ages at read time without stale stored values.
 - **Mock vector store when Pinecone/OpenAI keys are absent** — Local and CI runs exercise RAG tool paths without paid API dependencies.
+- **Org-prefixed Pinecone namespaces** — Each tenant’s vectors live under `{slug}::faq_general` (and other base namespaces); settings store the base key only.
 - **HMAC-verified Vapi webhooks** — Same signing contract in tests (`sign_vapi_payload`) and production middleware; rejects forged call-end events.
 - **SSE + Redis pub/sub for dashboard updates** — Push churn and call events to browsers without polling; nginx ingress timeouts extended for long-lived streams.
 - **Graceful `model_not_trained` in churn ensemble** — Feature pipeline and API stay operational before labeled data and `ml/artifacts/` exist; training is an operational step, not a boot blocker.
@@ -204,11 +240,17 @@ Coverage gate: **60%** (see `backend/.coveragerc` for omitted infrastructure ent
 
 ---
 
+## API summary (dashboard-authenticated)
+
+All `/api/v1/*` routes except `/health`, `/webhook/vapi`, and OAuth callbacks require header `X-API-Key: $DASHBOARD_API_KEY`.
+
+Notable groups: `customers`, `churn`, `analytics`, `knowledge`, `scheduling`, `integrations`, `imports` (CSV + Drive), `organizations`, `system/health`.
+
 ## Roadmap
 
 1. **Train the churn model** — Run `ml/training/train_churn_model.py` once `feature_store` has labeled rows; deploy artifacts to `ml/artifacts/`.
-2. **Live Vapi demo** — Point a phone number at `POST /webhook/vapi` with production secrets; validate call-start context injection and call-end scoring in Celery logs.
-3. **Technician churn on the dashboard** — Extend scoring and UI beyond `entity_type=CUSTOMER` to technician retention signals.
+2. **JWT auth for dashboard** — Replace single shared API key with per-user sessions.
+3. **Technician churn on the dashboard** — Extend scoring and UI beyond `entity_type=CUSTOMER`.
 
 ---
 

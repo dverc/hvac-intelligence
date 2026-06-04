@@ -11,6 +11,7 @@ from app.api.v1 import (
     organizations,
     scheduling,
     stream,
+    system,
     webhook_vapi,
 )
 from app.core.tenant import get_dashboard_org_id
@@ -22,6 +23,7 @@ api_router.include_router(customers.router)
 api_router.include_router(churn.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(imports.router)
+api_router.include_router(system.router)
 api_router.include_router(scheduling.router)
 api_router.include_router(integrations.router)
 api_router.include_router(

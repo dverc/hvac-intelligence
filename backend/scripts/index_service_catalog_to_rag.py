@@ -35,7 +35,7 @@ async def main() -> None:
     total = 0
     async with get_session_factory()() as session:
         knowledge = KnowledgeService(session, indexer=indexer)
-        faq_count = await knowledge.index_pricing_faq()
+        faq_count = await knowledge.index_pricing_faq(SEED_ORG_ID)
         total += faq_count
         print(f"Indexed pricing FAQ ({faq_count} chunk(s)).")
 

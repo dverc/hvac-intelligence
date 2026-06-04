@@ -185,9 +185,10 @@ class MockToolExecutor:
         self.org_settings = None
         self.db = None
 
-    def set_tenant(self, org_id, settings=None) -> None:
+    def set_tenant(self, org_id, settings=None, org_slug=None) -> None:
         self.org_id = org_id
         self.org_settings = settings
+        self.org_slug = org_slug
 
     async def execute_batch(self, tool_call_list: list[dict]) -> list[dict]:
         from app.services.tool_executor import _parse_vapi_tool_call
@@ -287,7 +288,7 @@ async def database_ready() -> AsyncGenerator[Any, None]:
                 """
             ).bindparams(
                 org_id=SEED_ORG_ID_STR,
-                settings='{"pinecone_namespace": "hvac-knowledge"}',
+                settings='{"pinecone_namespace": "faq_general"}',
             )
         )
         await conn.execute(

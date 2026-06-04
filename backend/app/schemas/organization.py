@@ -24,7 +24,7 @@ class OrganizationSettings(BaseModel):
 
     model_config = ConfigDict(extra="allow")  # forward-compatible
 
-    pinecone_namespace: str = "hvac-knowledge"
+    pinecone_namespace: str = "faq_general"
     issue_taxonomy: list[str] = Field(default_factory=list)
     customer_segments: list[str] = Field(default_factory=lambda: ["residential"])
     timezone: str = "America/Los_Angeles"
@@ -77,3 +77,7 @@ class OrganizationOut(BaseModel):
     settings: dict
     created_at: datetime
     updated_at: datetime
+
+
+class OrganizationListOut(OrganizationOut):
+    customer_count: int = 0

@@ -15,7 +15,7 @@ from app.models.document_registry import DocumentRegistry
 from app.models.organization import Organization
 from app.models.service_catalog import ServiceCatalog
 from app.rag.chunker import DocumentChunk, chunk_text
-from app.rag.constants import RAG_NAMESPACES
+from app.rag.constants import RAG_NAMESPACES, get_base_namespace, get_namespace
 from app.rag.indexer import KnowledgeIndexer
 from app.schemas.service_catalog import (
     ServiceCatalogCreate,
@@ -111,7 +111,7 @@ class KnowledgeService:
         org = await self._get_org(org_id)
         if org is None:
             return []
-        counts = self.indexer.get_namespace_counts()
+        counts = self.indexer.get_namespace_counts(org.slug)
         return [
             {"namespace": ns, "vector_count": counts.get(ns, 0)}
             for ns in sorted(RAG_NAMESPACES)
@@ -154,15 +154,17 @@ class KnowledgeService:
         org = await self._get_org(org_id)
         if org is None:
             raise ValueError(f"Organization {org_id} not found")
-        if namespace not in RAG_NAMESPACES:
+        base_namespace = get_base_namespace(namespace)
+        if base_namespace not in RAG_NAMESPACES:
             raise ValueError(f"Invalid namespace: {namespace}")
 
+        prefixed_namespace = get_namespace(org.slug, base_namespace)
         doc_id = document_id or _slugify(Path(filename).stem)
         text, extract_warnings = _extract_text(filename, content)
         chunks = chunk_text(
             text=text,
             source=filename,
-            namespace=namespace,
+            namespace=prefixed_namespace,
             strategy=chunking_strategy,
         )
         if not chunks:
@@ -170,13 +172,13 @@ class KnowledgeService:
                 DocumentChunk(
                     text=text[:512] or filename,
                     source=filename,
-                    namespace=namespace,
+                    namespace=prefixed_namespace,
                     chunk_index=0,
                 )
             ]
 
         chunk_ids = [f"{doc_id}::{index}" for index in range(len(chunks))]
-        await self.indexer.delete_by_id_prefix(namespace, f"{doc_id}::")
+        await self.indexer.delete_by_id_prefix(prefixed_namespace, f"{doc_id}::")
         chunks_indexed = await self.indexer.index_chunks(chunks, chunk_ids=chunk_ids)
 
         now = datetime.now(timezone.utc)
@@ -191,7 +193,7 @@ class KnowledgeService:
 
         if existing:
             existing.filename = filename
-            existing.namespace = namespace
+            existing.namespace = base_namespace
             existing.chunk_count = chunks_indexed
             existing.file_size_bytes = len(content)
             existing.mime_type = mime_type
@@ -203,7 +205,7 @@ class KnowledgeService:
                     org_id=org_id,
                     document_id=doc_id,
                     filename=filename,
-                    namespace=namespace,
+                    namespace=base_namespace,
                     chunk_count=chunks_indexed,
                     file_size_bytes=len(content),
                     mime_type=mime_type,
@@ -216,7 +218,7 @@ class KnowledgeService:
         return {
             "document_id": doc_id,
             "chunks_indexed": chunks_indexed,
-            "namespace": namespace,
+            "namespace": base_namespace,
             "warnings": extract_warnings,
         }
 
@@ -233,31 +235,43 @@ class KnowledgeService:
         ).scalar_one_or_none()
         if row is None:
             return None
-        await self.indexer.delete_by_id_prefix(row.namespace, f"{document_id}::")
+        org = await self._get_org(org_id)
+        if org is None:
+            return None
+        prefixed = get_namespace(org.slug, get_base_namespace(row.namespace))
+        await self.indexer.delete_by_id_prefix(prefixed, f"{document_id}::")
         row.is_active = False
         await self.db.flush()
         return {"deleted": True, "document_id": document_id}
 
     async def index_service_to_pricing(self, row: ServiceCatalog) -> int:
+        org = await self._get_org(row.org_id)
+        if org is None:
+            raise ValueError(f"Organization {row.org_id} not found")
+        pricing_ns = get_namespace(org.slug, "pricing")
         prefix = f"pricing::{row.service_code}"
-        await self.indexer.delete_by_id_prefix("pricing", prefix)
+        await self.indexer.delete_by_id_prefix(pricing_ns, prefix)
         text = build_service_rag_text(row)
         chunk = DocumentChunk(
             text=text,
             source=f"service_catalog:{row.service_code}",
-            namespace="pricing",
+            namespace=pricing_ns,
             chunk_index=0,
         )
         return await self.indexer.index_chunks(
             [chunk], chunk_ids=[f"{prefix}::0"]
         )
 
-    async def index_pricing_faq(self) -> int:
-        await self.indexer.delete_by_id_prefix("pricing", _PRICING_FAQ_ID)
+    async def index_pricing_faq(self, org_id: uuid.UUID) -> int:
+        org = await self._get_org(org_id)
+        if org is None:
+            raise ValueError(f"Organization {org_id} not found")
+        pricing_ns = get_namespace(org.slug, "pricing")
+        await self.indexer.delete_by_id_prefix(pricing_ns, _PRICING_FAQ_ID)
         chunk = DocumentChunk(
             text=_PRICING_FAQ_TEXT,
             source="pricing_faq",
-            namespace="pricing",
+            namespace=pricing_ns,
             chunk_index=0,
         )
         return await self.indexer.index_chunks([chunk], chunk_ids=[f"{_PRICING_FAQ_ID}::0"])
@@ -284,9 +298,12 @@ class KnowledgeService:
         if row is not None and row.is_active:
             await self.index_service_to_pricing(row)
         elif row is not None:
-            await self.indexer.delete_by_id_prefix(
-                "pricing", f"pricing::{row.service_code}"
-            )
+            org = await self._get_org(org_id)
+            if org is not None:
+                pricing_ns = get_namespace(org.slug, "pricing")
+                await self.indexer.delete_by_id_prefix(
+                    pricing_ns, f"pricing::{row.service_code}"
+                )
         return item
 
     async def list_service_catalog(self, org_id: uuid.UUID) -> list[ServiceCatalogItem]:

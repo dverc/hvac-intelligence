@@ -150,7 +150,11 @@ async def handle_vapi_webhook(
     org_id = await tenant_service.resolve_org_for_call(str(call_id), message)
     org = await tenant_service.get_tenant_by_id(org_id)
     org_settings = OrganizationSettings.model_validate(org.settings or {}) if org else None
-    tool_executor.set_tenant(org_id, org_settings)
+    tool_executor.set_tenant(
+        org_id,
+        org_settings,
+        org_slug=org.slug if org is not None else None,
+    )
     if org is not None:
         logger.info(
             "Tenant resolved: %s (org_id=%s) | call_id=%s",

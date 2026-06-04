@@ -22,14 +22,29 @@ async def test_create_organization_succeeds(api_client):
             "slug": slug,
             "industry": "plumbing",
             "business_phone": phone,
-            "settings": {"pinecone_namespace": "acme-kb"},
+            "settings": {"pinecone_namespace": "faq_general"},
         },
     )
     assert response.status_code == 201
     body = response.json()
     assert body["slug"] == slug
     assert body["industry"] == "plumbing"
-    assert body["settings"]["pinecone_namespace"] == "acme-kb"
+    assert body["settings"]["pinecone_namespace"] == "faq_general"
+
+
+@pytest.mark.asyncio
+async def test_create_organization_slug_stored(api_client):
+    slug = _unique("plumb-co")
+    response = await api_client.post(
+        "/api/v1/organizations",
+        json={
+            "org_name": "Plumb Co",
+            "slug": slug,
+            "industry": "plumbing",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["slug"] == slug
 
 
 @pytest.mark.asyncio
