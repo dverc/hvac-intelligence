@@ -23,7 +23,7 @@ jobs:
       VAPI_API_KEY: ci-placeholder
       VAPI_WEBHOOK_SECRET: ci-placeholder
       VAPI_ASSISTANT_ID: ci-placeholder
-      PINECONE_API_KEY: ci-placeholder
+      PINECONE_API_KEY: pc-dev-test
       PINECONE_ENVIRONMENT: us-east-1
       KAFKA_BOOTSTRAP_SERVERS: localhost:9092
       REDIS_URL: redis://localhost:6379/0
