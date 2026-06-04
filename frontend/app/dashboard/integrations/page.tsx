@@ -180,6 +180,11 @@ export default function IntegrationsPage() {
             Sync technician schedules with Google Calendar. Bookings appear
             automatically and external events block availability.
           </p>
+          <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">
+            Google Drive sync (Import → Drive tab) uses the same Google account.
+            If you connected before Phase 9, disconnect and reconnect once to
+            grant Drive read access.
+          </p>
 
           {loading ? (
             <p className="text-sm text-gray-500">Loading…</p>

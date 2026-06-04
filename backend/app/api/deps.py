@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+import uuid
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,6 +91,23 @@ async def get_google_calendar_service(
     from app.services.google_calendar_service import GoogleCalendarService
 
     return GoogleCalendarService(db)
+
+
+async def get_csv_import_service(
+    org_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> "CsvImportService":
+    from app.services.csv_import_service import CsvImportService
+
+    return CsvImportService(db, org_id)
+
+
+async def get_google_drive_service(
+    db: AsyncSession = Depends(get_db),
+) -> "GoogleDriveService":
+    from app.services.google_drive_service import GoogleDriveService
+
+    return GoogleDriveService(db)
 
 
 async def get_tool_executor(

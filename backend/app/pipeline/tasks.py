@@ -531,3 +531,71 @@ async def _sync_jobber_data_async() -> dict[str, Any]:
             raise
 
     return {"status": "ok", "summaries": summaries}
+
+
+@celery_app.task(name="app.pipeline.tasks.sync_google_drive_folders")
+def sync_google_drive_folders() -> dict[str, Any]:
+    """Sync Google Drive knowledge folders for connected orgs (Phase 9)."""
+    return asyncio.run(_sync_google_drive_folders_async())
+
+
+async def _sync_google_drive_folders_async() -> dict[str, Any]:
+    from app.core.database import get_session_factory
+    from app.models.organization import Organization
+    from app.services.google_drive_service import GoogleDriveService
+
+    summaries: list[str] = []
+    total_synced = 0
+
+    async with get_session_factory()() as session:
+        try:
+            tokens = (
+                await session.execute(
+                    select(GoogleCalendarToken).where(
+                        GoogleCalendarToken.is_active.is_(True)
+                    )
+                )
+            ).scalars().all()
+
+            drive = GoogleDriveService(session)
+            seen_orgs: set[uuid.UUID] = set()
+
+            for token in tokens:
+                if token.org_id in seen_orgs:
+                    continue
+                seen_orgs.add(token.org_id)
+
+                org = await session.get(Organization, token.org_id)
+                if org is None:
+                    continue
+                settings = dict(org.settings or {})
+                if not settings.get("drive_folder_id"):
+                    continue
+
+                try:
+                    result = await drive.sync_folder_to_knowledge_base(token.org_id)
+                    synced = int(result.get("synced", 0))
+                    total_synced += synced
+                    name = org.org_name
+                    summary = (
+                        f"Drive sync: {name} — synced:{synced} "
+                        f"skipped:{result.get('skipped', 0)} "
+                        f"errors:{result.get('errors', 0)}"
+                    )
+                    summaries.append(summary)
+                    logger.info(summary)
+                except Exception as exc:
+                    logger.warning(
+                        "Drive sync failed for org=%s: %s", token.org_id, exc
+                    )
+
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+    return {
+        "status": "ok",
+        "files_synced": total_synced,
+        "summaries": summaries,
+    }

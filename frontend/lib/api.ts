@@ -542,6 +542,82 @@ export function disconnectJobber(orgId: string) {
   );
 }
 
+// ── Data import (CSV + Google Drive) ────────────────────────────────────────
+
+export type CsvImportResult = {
+  total_rows: number;
+  imported: number;
+  skipped: number;
+  errors: { row: number; message: string }[];
+  dry_run: boolean;
+  warnings: string[];
+};
+
+export type DriveStatus = {
+  connected: boolean;
+  folder_id: string | null;
+  folder_url: string | null;
+  file_count: number;
+  last_sync: string | null;
+};
+
+export function importCustomers(orgId: string, file: File, dryRun: boolean) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("dry_run", dryRun ? "true" : "false");
+  return apiPostForm<CsvImportResult>(
+    `/api/v1/imports/${orgId}/customers`,
+    form,
+  );
+}
+
+export function importEquipment(orgId: string, file: File, dryRun: boolean) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("dry_run", dryRun ? "true" : "false");
+  return apiPostForm<CsvImportResult>(
+    `/api/v1/imports/${orgId}/equipment`,
+    form,
+  );
+}
+
+export async function getImportTemplate(
+  orgId: string,
+  type: "customers" | "equipment",
+): Promise<Blob> {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/v1/imports/${orgId}/templates/${type}`,
+    {
+      cache: "no-store",
+      headers: { ...apiKeyHeaders() },
+    },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(
+      response.status,
+      `GET template ${type} failed: ${body}`,
+    );
+  }
+  return response.blob();
+}
+
+export function setupDriveFolder(orgId: string) {
+  return apiPost<{ folder_id: string; folder_url: string; message: string }>(
+    `/api/v1/imports/${orgId}/drive/setup`,
+  );
+}
+
+export function syncDriveFolder(orgId: string) {
+  return apiPost<{ synced: number; skipped: number; errors: number }>(
+    `/api/v1/imports/${orgId}/drive/sync`,
+  );
+}
+
+export function getDriveStatus(orgId: string) {
+  return apiGet<DriveStatus>(`/api/v1/imports/${orgId}/drive/status`);
+}
+
 // ── SSE (dashboard real-time) ───────────────────────────────────────────────
 
 /** URL for EventSource — not a JSON fetch. Auth via query param (SSE cannot set headers). */

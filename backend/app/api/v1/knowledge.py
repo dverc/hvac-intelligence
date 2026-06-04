@@ -45,6 +45,7 @@ async def upload_document(
     file: UploadFile = File(...),
     namespace: str = Form(default="faq_general"),
     document_id: str | None = Form(default=None),
+    chunking_strategy: str = Form(default="paragraph"),
     knowledge: KnowledgeService = Depends(get_knowledge_service),
 ) -> dict:
     content = await file.read()
@@ -58,6 +59,7 @@ async def upload_document(
             namespace=namespace,
             document_id=document_id,
             mime_type=file.content_type,
+            chunking_strategy=chunking_strategy,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

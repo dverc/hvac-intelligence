@@ -40,6 +40,10 @@ celery_app.conf.update(
             "task": "app.pipeline.tasks.sync_jobber_data",
             "schedule": crontab(minute=0, hour="*/6"),
         },
+        "sync-google-drive": {
+            "task": "app.pipeline.tasks.sync_google_drive_folders",
+            "schedule": crontab(minute="*/30"),
+        },
     },
 )
 

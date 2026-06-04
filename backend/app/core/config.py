@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     GOOGLE_CALENDAR_SCOPES: list[str] = [
         "https://www.googleapis.com/auth/calendar.events",
         "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
     ]

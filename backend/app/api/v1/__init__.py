@@ -5,6 +5,7 @@ from app.api.v1 import (
     calls,
     churn,
     customers,
+    imports,
     integrations,
     knowledge,
     organizations,
@@ -20,6 +21,7 @@ api_router.include_router(calls.router)
 api_router.include_router(customers.router)
 api_router.include_router(churn.router)
 api_router.include_router(knowledge.router)
+api_router.include_router(imports.router)
 api_router.include_router(scheduling.router)
 api_router.include_router(integrations.router)
 api_router.include_router(

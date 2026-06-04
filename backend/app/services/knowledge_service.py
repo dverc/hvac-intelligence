@@ -14,7 +14,7 @@ from app.core.tenant import scoped
 from app.models.document_registry import DocumentRegistry
 from app.models.organization import Organization
 from app.models.service_catalog import ServiceCatalog
-from app.rag.chunker import DocumentChunk, split_text
+from app.rag.chunker import DocumentChunk, chunk_text
 from app.rag.constants import RAG_NAMESPACES
 from app.rag.indexer import KnowledgeIndexer
 from app.schemas.service_catalog import (
@@ -42,21 +42,60 @@ def _slugify(value: str) -> str:
     return slug or "document"
 
 
-def _extract_text(filename: str, content: bytes) -> str:
+_PAGE_BREAK = "\n--- PAGE BREAK ---\n"
+
+
+def _extract_text(filename: str, content: bytes) -> tuple[str, list[str]]:
+    """Return (text, warnings) for supported document types."""
     lower = filename.lower()
-    if lower.endswith((".md", ".txt")):
-        return content.decode("utf-8", errors="replace")
+    warnings: list[str] = []
+
+    if lower.endswith(".csv"):
+        raise ValueError(
+            "CSV files cannot be uploaded as knowledge documents. "
+            "Use POST /api/v1/imports/{org_id}/customers or /equipment instead."
+        )
+    if lower.endswith((".md", ".txt", ".text")):
+        return content.decode("utf-8", errors="replace"), warnings
     if lower.endswith(".pdf"):
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(content))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-    if lower.endswith(".docx"):
+        pages = [page.extract_text() or "" for page in reader.pages]
+        text = _PAGE_BREAK.join(p.strip() for p in pages if p.strip())
+        if not text.strip():
+            warnings.append(
+                "No extractable text found in PDF (it may be scanned/image-only)."
+            )
+        return text, warnings
+    if lower.endswith((".docx", ".doc")):
         from docx import Document
 
         doc = Document(io.BytesIO(content))
-        return "\n".join(p.text for p in doc.paragraphs if p.text)
-    raise ValueError("Unsupported file type. Use .md, .txt, .pdf, or .docx")
+        parts: list[str] = []
+        for paragraph in doc.paragraphs:
+            line = paragraph.text.strip()
+            if not line:
+                continue
+            style = (paragraph.style.name or "").lower()
+            if "heading" in style:
+                parts.append(f"## {line}")
+            else:
+                parts.append(line)
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    parts.append(" | ".join(cells))
+        text = "\n\n".join(parts)
+        if not text.strip():
+            warnings.append("No extractable text found in Word document.")
+        return text, warnings
+
+    raise ValueError(
+        f"Unsupported file type for '{filename}'. "
+        "Supported: .pdf, .docx, .md, .txt"
+    )
 
 
 class KnowledgeService:
@@ -110,6 +149,7 @@ class KnowledgeService:
         namespace: str = "faq_general",
         document_id: str | None = None,
         mime_type: str | None = None,
+        chunking_strategy: str = "paragraph",
     ) -> dict[str, Any]:
         org = await self._get_org(org_id)
         if org is None:
@@ -118,8 +158,13 @@ class KnowledgeService:
             raise ValueError(f"Invalid namespace: {namespace}")
 
         doc_id = document_id or _slugify(Path(filename).stem)
-        text = _extract_text(filename, content)
-        chunks = split_text(text=text, source=filename, namespace=namespace)
+        text, extract_warnings = _extract_text(filename, content)
+        chunks = chunk_text(
+            text=text,
+            source=filename,
+            namespace=namespace,
+            strategy=chunking_strategy,
+        )
         if not chunks:
             chunks = [
                 DocumentChunk(
@@ -172,6 +217,7 @@ class KnowledgeService:
             "document_id": doc_id,
             "chunks_indexed": chunks_indexed,
             "namespace": namespace,
+            "warnings": extract_warnings,
         }
 
     async def delete_document(
