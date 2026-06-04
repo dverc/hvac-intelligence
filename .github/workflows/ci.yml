@@ -17,6 +17,32 @@ jobs:
       run:
         working-directory: backend
 
+    env:
+      ANTHROPIC_API_KEY: ci-placeholder
+      OPENAI_API_KEY: sk-ci-placeholder
+      VAPI_API_KEY: ci-placeholder
+      VAPI_WEBHOOK_SECRET: ci-placeholder
+      VAPI_ASSISTANT_ID: ci-placeholder
+      PINECONE_API_KEY: ci-placeholder
+      PINECONE_ENVIRONMENT: us-east-1
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      REDIS_URL: redis://localhost:6379/0
+      MODEL_ARTIFACTS_PATH: ../ml/artifacts
+      RAG_MOCK_INDEX_PATH: ../data/knowledge/.mock_vector_index.json
+      DASHBOARD_API_KEY: test-dashboard-api-key-for-ci
+      ENVIRONMENT: test
+      VAPI_WEBHOOK_HMAC_BYPASS: "true"
+      DASHBOARD_ORG_ID: 00000000-0000-4000-8000-000000000001
+      VAPI_PHONE_NUMBER: "+19498800687"
+      GOOGLE_CLIENT_ID: test-google-client-id
+      GOOGLE_CLIENT_SECRET: test-google-client-secret
+      GOOGLE_OAUTH_REDIRECT_URI: http://localhost:8000/api/v1/integrations/google/oauth/callback
+      GOOGLE_TOKEN_ENCRYPTION_KEY: e2gKJTHKagKvvoNAtCqcSslzlvaEWn1a3mfBCpbxRnI=
+      FRONTEND_BASE_URL: http://localhost:3000
+      JOBBER_CLIENT_ID: test-jobber-client-id
+      JOBBER_CLIENT_SECRET: test-jobber-client-secret
+      JOBBER_OAUTH_REDIRECT_URI: http://localhost:8000/api/v1/integrations/jobber/oauth/callback
+
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -56,31 +82,9 @@ jobs:
           psql -h localhost -U hvac_user -d hvac_intel -c "CREATE DATABASE hvac_intel_test;" || true
 
       - name: Run Alembic migrations
-        env:
-          ANTHROPIC_API_KEY: ci-placeholder
-          OPENAI_API_KEY: sk-ci-placeholder
-          VAPI_API_KEY: ci-placeholder
-          VAPI_WEBHOOK_SECRET: ci-placeholder
-          VAPI_ASSISTANT_ID: ci-placeholder
-          PINECONE_API_KEY: ci-placeholder
-          PINECONE_ENVIRONMENT: us-east-1
-          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
-          REDIS_URL: redis://localhost:6379/0
         run: alembic upgrade head
 
       - name: Run tests with coverage
-        env:
-          ANTHROPIC_API_KEY: ci-placeholder
-          OPENAI_API_KEY: sk-ci-placeholder
-          VAPI_API_KEY: ci-placeholder
-          VAPI_WEBHOOK_SECRET: ci-placeholder
-          VAPI_ASSISTANT_ID: ci-placeholder
-          PINECONE_API_KEY: ci-placeholder
-          PINECONE_ENVIRONMENT: us-east-1
-          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
-          REDIS_URL: redis://localhost:6379/0
-          MODEL_ARTIFACTS_PATH: ../ml/artifacts
-          RAG_MOCK_INDEX_PATH: ../data/knowledge/.mock_vector_index.json
         run: |
           pytest tests/ --cov=app --cov-report=term-missing --cov-fail-under=59
 

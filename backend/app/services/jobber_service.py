@@ -175,6 +175,35 @@ class JobberService:
             return None
         return datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
 
+    @staticmethod
+    def _graphql_headers(access_token: str) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "X-JOBBER-GRAPHQL-VERSION": JOBBER_GRAPHQL_VERSION,
+        }
+
+    async def _graphql_request(
+        self,
+        access_token: str,
+        query: str,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a GraphQL request with an explicit bearer token (OAuth callback safe)."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                JOBBER_GRAPHQL_URL,
+                json={"query": query, "variables": variables or {}},
+                headers=self._graphql_headers(access_token),
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+        if payload.get("errors"):
+            logger.error("Jobber GraphQL errors: %s", payload["errors"])
+            raise ValueError(f"Jobber GraphQL error: {payload['errors']}")
+        return payload
+
     async def handle_oauth_callback(self, code: str, state: str) -> JobberToken:
         try:
             org_id, _ = verify_oauth_state(state, self.settings.DASHBOARD_API_KEY)
@@ -187,13 +216,18 @@ class JobberService:
         if not access or not refresh:
             raise ValueError("Jobber token exchange did not return access/refresh tokens")
 
+        # Use the freshly exchanged access token — not DB-backed auth (token not persisted yet).
+        account_payload = await self._graphql_request(access, ACCOUNT_INFO_QUERY)
+        account_data = (account_payload.get("data") or {}).get("account") or {}
+
         row = await self._get_token_row(org_id, active_only=False)
+        expiry = self._token_expiry_from_response(token_payload)
         if row is None:
             row = JobberToken(
                 org_id=org_id,
                 access_token=encrypt_token(access) or "",
                 refresh_token=encrypt_token(refresh) or "",
-                token_expiry=self._token_expiry_from_response(token_payload),
+                token_expiry=expiry,
                 scopes=token_payload.get("scope"),
                 is_active=True,
             )
@@ -201,14 +235,10 @@ class JobberService:
         else:
             row.access_token = encrypt_token(access) or ""
             row.refresh_token = encrypt_token(refresh) or ""
-            row.token_expiry = self._token_expiry_from_response(token_payload)
+            row.token_expiry = expiry
             row.scopes = token_payload.get("scope")
             row.is_active = True
 
-        await self.db.flush()
-
-        account = await self.graphql_query(org_id, ACCOUNT_INFO_QUERY)
-        account_data = (account.get("data") or {}).get("account") or {}
         row.jobber_account_id = account_data.get("id")
         row.jobber_account_name = account_data.get("name")
         await self.db.flush()
@@ -264,32 +294,18 @@ class JobberService:
         if not access:
             raise ValueError("Missing Jobber access token")
         return httpx.AsyncClient(
-            headers={
-                "Authorization": f"Bearer {access}",
-                "Content-Type": "application/json",
-                "X-JOBBER-GRAPHQL-VERSION": JOBBER_GRAPHQL_VERSION,
-            },
+            headers=self._graphql_headers(access),
             timeout=30.0,
         )
 
     async def graphql_query(
         self, org_id: uuid.UUID, query: str, variables: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        client = await self.get_authenticated_client(org_id)
-        try:
-            response = await client.post(
-                JOBBER_GRAPHQL_URL,
-                json={"query": query, "variables": variables or {}},
-            )
-            response.raise_for_status()
-            payload = response.json()
-        finally:
-            await client.aclose()
-
-        if payload.get("errors"):
-            logger.error("Jobber GraphQL errors: %s", payload["errors"])
-            raise ValueError(f"Jobber GraphQL error: {payload['errors']}")
-        return payload
+        token = await self._ensure_fresh_token(org_id)
+        access = decrypt_token(token.access_token)
+        if not access:
+            raise ValueError("Missing Jobber access token")
+        return await self._graphql_request(access, query, variables)
 
     async def get_connection_status(self, org_id: uuid.UUID) -> dict[str, Any]:
         token = await self._get_token_row(org_id)
