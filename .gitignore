@@ -32,3 +32,4 @@ grafana_data/
 
 # Local DB backups
 backup_pre_phase5.sql
+data/knowledge/.mock_vector_index.json
