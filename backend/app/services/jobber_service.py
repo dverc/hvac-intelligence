@@ -211,36 +211,49 @@ class JobberService:
             raise ValueError(str(exc)) from exc
 
         token_payload = await self._exchange_code(code)
-        access = token_payload.get("access_token")
-        refresh = token_payload.get("refresh_token")
-        if not access or not refresh:
+        access_token = str(token_payload.get("access_token") or "").strip()
+        refresh_token = str(token_payload.get("refresh_token") or "").strip()
+        if not access_token or not refresh_token:
             raise ValueError("Jobber token exchange did not return access/refresh tokens")
 
-        # Use the freshly exchanged access token — not DB-backed auth (token not persisted yet).
-        account_payload = await self._graphql_request(access, ACCOUNT_INFO_QUERY)
-        account_data = (account_payload.get("data") or {}).get("account") or {}
+        # Fresh OAuth access token only — never DB-backed auth during callback.
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.getjobber.com/api/graphql",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                    "X-JOBBER-GRAPHQL-VERSION": "2024-11-20",
+                },
+                json={"query": ACCOUNT_INFO_QUERY},
+            )
+            resp.raise_for_status()
+            account_info = resp.json()
+            account = account_info.get("data", {}).get("account", {})
+            jobber_account_id = str(account.get("id", ""))
+            jobber_account_name = account.get("name", "")
 
         row = await self._get_token_row(org_id, active_only=False)
         expiry = self._token_expiry_from_response(token_payload)
         if row is None:
             row = JobberToken(
                 org_id=org_id,
-                access_token=encrypt_token(access) or "",
-                refresh_token=encrypt_token(refresh) or "",
+                access_token=encrypt_token(access_token) or "",
+                refresh_token=encrypt_token(refresh_token) or "",
                 token_expiry=expiry,
                 scopes=token_payload.get("scope"),
                 is_active=True,
             )
             self.db.add(row)
         else:
-            row.access_token = encrypt_token(access) or ""
-            row.refresh_token = encrypt_token(refresh) or ""
+            row.access_token = encrypt_token(access_token) or ""
+            row.refresh_token = encrypt_token(refresh_token) or ""
             row.token_expiry = expiry
             row.scopes = token_payload.get("scope")
             row.is_active = True
 
-        row.jobber_account_id = account_data.get("id")
-        row.jobber_account_name = account_data.get("name")
+        row.jobber_account_id = jobber_account_id or None
+        row.jobber_account_name = jobber_account_name or None
         await self.db.flush()
         return row
 
