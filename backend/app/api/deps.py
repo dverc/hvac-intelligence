@@ -76,6 +76,14 @@ async def get_service_catalog_service(
     return ServiceCatalogService(db)
 
 
+async def get_jobber_service(
+    db: AsyncSession = Depends(get_db),
+) -> "JobberService":
+    from app.services.jobber_service import JobberService
+
+    return JobberService(db)
+
+
 async def get_google_calendar_service(
     db: AsyncSession = Depends(get_db),
 ) -> "GoogleCalendarService":

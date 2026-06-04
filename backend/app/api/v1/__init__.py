@@ -29,3 +29,4 @@ api_router.include_router(stream.router)
 
 vapi_router = webhook_vapi.router
 google_oauth_router = integrations.google_oauth_router
+jobber_oauth_router = integrations.jobber_oauth_router

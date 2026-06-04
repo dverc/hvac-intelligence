@@ -36,6 +36,10 @@ celery_app.conf.update(
             "task": "app.pipeline.tasks.sync_google_calendars",
             "schedule": crontab(minute=0, hour="*/4"),
         },
+        "sync-jobber-data": {
+            "task": "app.pipeline.tasks.sync_jobber_data",
+            "schedule": crontab(minute=0, hour="*/6"),
+        },
     },
 )
 

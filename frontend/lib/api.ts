@@ -495,6 +495,53 @@ async function apiDeleteJson<T>(path: string, payload: Record<string, unknown>):
   return response.json() as Promise<T>;
 }
 
+// ── Integrations (Jobber) ───────────────────────────────────────────────────
+
+export type JobberStatus = {
+  connected: boolean;
+  account_name: string | null;
+  account_id: string | null;
+  last_sync_at: string | null;
+  is_active: boolean;
+};
+
+export function getJobberStatus(orgId: string) {
+  return apiGet<JobberStatus>("/api/v1/integrations/jobber/status", {
+    org_id: orgId,
+  });
+}
+
+export function getJobberConnectUrl(orgId: string) {
+  return apiGet<{ authorization_url: string }>(
+    "/api/v1/integrations/jobber/connect",
+    { org_id: orgId },
+  );
+}
+
+export function syncJobberData(
+  orgId: string,
+  syncType: "all" | "clients" | "jobs" | "users" = "all",
+  daysAhead = 7,
+) {
+  void orgId;
+  return apiPostJson<{
+    clients_synced: number;
+    users_synced: number;
+    jobs_synced: number;
+  }>("/api/v1/integrations/jobber/sync", {
+    sync_type: syncType,
+    days_ahead: daysAhead,
+  });
+}
+
+export function disconnectJobber(orgId: string) {
+  void orgId;
+  return apiDeleteJson<{ disconnected: boolean }>(
+    "/api/v1/integrations/jobber/disconnect",
+    {},
+  );
+}
+
 // ── SSE (dashboard real-time) ───────────────────────────────────────────────
 
 /** URL for EventSource — not a JSON fetch. Auth via query param (SSE cannot set headers). */

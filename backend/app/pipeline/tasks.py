@@ -19,6 +19,7 @@ from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
 from app.models.feature_store import FeatureStore
 from app.models.google_calendar_token import GoogleCalendarToken
+from app.models.jobber_token import JobberToken
 from app.models.organization import Organization
 from app.models.technician import Technician
 from app.pipeline.celery_app import celery_app
@@ -482,3 +483,51 @@ async def _sync_google_calendars_async() -> dict[str, Any]:
         "events_synced": total_synced,
         "summaries": summaries,
     }
+
+
+@celery_app.task(name="app.pipeline.tasks.sync_jobber_data")
+def sync_jobber_data() -> dict[str, Any]:
+    """Sync Jobber clients, users, and jobs into local tables (Phase 8B)."""
+    return asyncio.run(_sync_jobber_data_async())
+
+
+async def _sync_jobber_data_async() -> dict[str, Any]:
+    from app.core.database import get_session_factory
+    from app.services.jobber_service import JobberService
+
+    summaries: list[str] = []
+
+    async with get_session_factory()() as session:
+        try:
+            tokens = (
+                await session.execute(
+                    select(JobberToken).where(JobberToken.is_active.is_(True))
+                )
+            ).scalars().all()
+
+            jobber = JobberService(session)
+            for token in tokens:
+                try:
+                    clients = await jobber.sync_clients_to_customers(token.org_id)
+                    users = await jobber.sync_users_to_technicians(token.org_id)
+                    jobs = await jobber.sync_jobs_to_dispatch(token.org_id)
+                    await jobber.mark_sync_completed(token.org_id)
+                    org = await session.get(Organization, token.org_id)
+                    name = org.org_name if org else str(token.org_id)
+                    summary = (
+                        f"Jobber sync: {name} — "
+                        f"clients:{clients} users:{users} jobs:{jobs}"
+                    )
+                    summaries.append(summary)
+                    logger.info(summary)
+                except Exception as exc:
+                    logger.warning(
+                        "Jobber sync failed for org=%s: %s", token.org_id, exc
+                    )
+
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+    return {"status": "ok", "summaries": summaries}

@@ -71,6 +71,9 @@ _DEFAULTS = {
     "GOOGLE_OAUTH_REDIRECT_URI": "http://localhost:8000/api/v1/integrations/google/oauth/callback",
     "GOOGLE_TOKEN_ENCRYPTION_KEY": "",
     "FRONTEND_BASE_URL": "http://localhost:3000",
+    "JOBBER_CLIENT_ID": "test-jobber-client-id",
+    "JOBBER_CLIENT_SECRET": "test-jobber-secret",
+    "JOBBER_OAUTH_REDIRECT_URI": "http://localhost:8000/api/v1/integrations/jobber/oauth/callback",
 }
 for _key, _value in _DEFAULTS.items():
     os.environ.setdefault(_key, _value)

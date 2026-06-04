@@ -6,6 +6,7 @@ from app.models.document_registry import DocumentRegistry
 from app.models.equipment import Equipment
 from app.models.feature_store import FeatureStore
 from app.models.google_calendar_token import GoogleCalendarToken
+from app.models.jobber_token import JobberToken
 from app.models.organization import Organization
 from app.models.schedule_override import ScheduleOverride
 from app.models.service_catalog import ServiceCatalog
@@ -22,6 +23,7 @@ __all__ = [
     "Equipment",
     "FeatureStore",
     "GoogleCalendarToken",
+    "JobberToken",
     "Organization",
     "ScheduleOverride",
     "ServiceCatalog",

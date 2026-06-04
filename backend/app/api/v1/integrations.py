@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from app.api.deps import get_db, get_google_calendar_service
+from app.api.deps import get_db, get_google_calendar_service, get_jobber_service
 from app.core.config import get_settings
 from app.core.tenant import get_dashboard_org_id
 from app.services.google_calendar_service import GoogleCalendarService
+from app.services.jobber_service import JobberService
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,10 @@ router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 google_oauth_router = APIRouter(
     prefix="/api/v1/integrations/google", tags=["integrations"]
+)
+
+jobber_oauth_router = APIRouter(
+    prefix="/api/v1/integrations/jobber", tags=["integrations"]
 )
 
 
@@ -117,3 +122,98 @@ async def google_sync(
         body.date_to,
     )
     return {"synced": count}
+
+
+class JobberSyncBody(BaseModel):
+    sync_type: str = "all"
+    days_ahead: int = 7
+
+
+@router.get("/jobber/connect")
+async def jobber_connect(
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    jobber: JobberService = Depends(get_jobber_service),
+) -> dict[str, str]:
+    return {"authorization_url": jobber.get_oauth_url(org_id)}
+
+
+@jobber_oauth_router.get("/oauth/callback")
+async def jobber_oauth_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    settings = get_settings()
+    base = settings.FRONTEND_BASE_URL.rstrip("/")
+    success_url = f"{base}/dashboard/integrations?connected=jobber&status=success"
+    error_url = f"{base}/dashboard/integrations?connected=jobber&status=error"
+
+    if error:
+        return RedirectResponse(
+            f"{error_url}&reason={quote(error)}", status_code=302
+        )
+    if not code or not state:
+        return RedirectResponse(
+            f"{error_url}&reason={quote('missing_code_or_state')}",
+            status_code=302,
+        )
+
+    service = JobberService(db)
+    try:
+        await service.handle_oauth_callback(code, state)
+        await db.commit()
+        return RedirectResponse(success_url, status_code=302)
+    except Exception as exc:
+        logger.exception("Jobber OAuth callback failed: %s", exc)
+        await db.rollback()
+        return RedirectResponse(
+            f"{error_url}&reason={quote(str(exc)[:200])}",
+            status_code=302,
+        )
+
+
+@router.get("/jobber/status")
+async def jobber_status(
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    jobber: JobberService = Depends(get_jobber_service),
+) -> dict:
+    return await jobber.get_connection_status(org_id)
+
+
+@router.delete("/jobber/disconnect")
+async def jobber_disconnect(
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    jobber: JobberService = Depends(get_jobber_service),
+) -> dict[str, bool]:
+    ok = await jobber.disconnect(org_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Jobber connection not found")
+    return {"disconnected": True}
+
+
+@router.post("/jobber/sync")
+async def jobber_sync(
+    body: JobberSyncBody,
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    jobber: JobberService = Depends(get_jobber_service),
+) -> dict[str, int]:
+    clients_synced = 0
+    users_synced = 0
+    jobs_synced = 0
+    sync_type = body.sync_type.lower()
+
+    if sync_type in ("all", "clients"):
+        clients_synced = await jobber.sync_clients_to_customers(org_id)
+    if sync_type in ("all", "users"):
+        users_synced = await jobber.sync_users_to_technicians(org_id)
+    if sync_type in ("all", "jobs"):
+        jobs_synced = await jobber.sync_jobs_to_dispatch(org_id, body.days_ahead)
+
+    await jobber.mark_sync_completed(org_id)
+
+    return {
+        "clients_synced": clients_synced,
+        "users_synced": users_synced,
+        "jobs_synced": jobs_synced,
+    }

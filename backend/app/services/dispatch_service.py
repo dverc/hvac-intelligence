@@ -18,6 +18,7 @@ from app.schemas.organization import OrganizationSettings
 from app.schemas.tools import UpdateDispatchArgs
 from app.services.availability_service import AvailabilityService
 from app.services.google_calendar_service import GoogleCalendarService
+from app.services.jobber_service import JobberService
 from app.services.window_parser import ParsedWindow, parse_preferred_window
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,17 @@ class DispatchService:
             except Exception as exc:
                 logger.exception(
                     "Google Calendar event creation failed for job %s: %s",
+                    job.job_number,
+                    exc,
+                )
+
+        jobber = JobberService(self.db)
+        if await jobber.has_active_connection(org_id):
+            try:
+                await jobber.create_job_in_jobber(org_id, job, technician, customer)
+            except Exception as exc:
+                logger.exception(
+                    "Jobber job creation failed for job %s: %s",
                     job.job_number,
                     exc,
                 )

@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     GOOGLE_TOKEN_ENCRYPTION_KEY: str = ""
     FRONTEND_BASE_URL: str = "http://localhost:3000"
 
+    # Jobber OAuth (secrets in .env only — never commit)
+    JOBBER_CLIENT_ID: str = ""
+    JOBBER_CLIENT_SECRET: str = ""
+    JOBBER_OAUTH_REDIRECT_URI: str = (
+        "http://localhost:8000/api/v1/integrations/jobber/oauth/callback"
+    )
+
     @model_validator(mode="after")
     def validate_security_settings(self) -> "Settings":
         if not self.DASHBOARD_API_KEY.strip():

@@ -49,6 +49,7 @@ class DispatchJob(Base):
         Index("idx_jobs_customer", "customer_id"),
         Index("idx_jobs_tech", "technician_id", "scheduled_window_start"),
         Index("idx_jobs_status", "job_status"),
+        Index("ix_dispatch_jobs_org_external_job_id", "org_id", "external_job_id"),
         UniqueConstraint("org_id", "job_number", name="uq_dispatch_jobs_org_job_number"),
     )
 
@@ -91,6 +92,7 @@ class DispatchJob(Base):
         DateTime(timezone=True)
     )
     google_calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255))
+    external_job_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     actual_arrival: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     actual_completion: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     resolution_notes: Mapped[Optional[str]] = mapped_column(Text)
