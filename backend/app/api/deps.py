@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+import threading
 import uuid
 
 from fastapi import Depends
@@ -47,8 +48,28 @@ async def get_transcript_service(db: AsyncSession = Depends(get_db)) -> Transcri
     return TranscriptService(db)
 
 
+_rag_retriever: RAGRetriever | None = None
+_rag_retriever_lock = threading.Lock()
+
+
 def get_rag_retriever() -> RAGRetriever:
-    return RAGRetriever()
+    """Process-wide singleton — Pinecone client init is expensive."""
+    global _rag_retriever
+    if _rag_retriever is None:
+        with _rag_retriever_lock:
+            if _rag_retriever is None:
+                _rag_retriever = RAGRetriever()
+    return _rag_retriever
+
+
+async def build_tool_executor(db: AsyncSession) -> ToolExecutor:
+    return ToolExecutor(
+        customer_service=CustomerService(db),
+        dispatch_service=DispatchService(db),
+        churn_service=ChurnService(db),
+        ticket_service=TicketService(db),
+        rag_retriever=get_rag_retriever(),
+    )
 
 
 async def get_ticket_service(db: AsyncSession = Depends(get_db)) -> TicketService:
@@ -110,17 +131,5 @@ async def get_google_drive_service(
     return GoogleDriveService(db)
 
 
-async def get_tool_executor(
-    customer_service: CustomerService = Depends(get_customer_service),
-    dispatch_service: DispatchService = Depends(get_dispatch_service),
-    churn_service: ChurnService = Depends(get_churn_service),
-    ticket_service: TicketService = Depends(get_ticket_service),
-    rag_retriever: RAGRetriever = Depends(get_rag_retriever),
-) -> ToolExecutor:
-    return ToolExecutor(
-        customer_service=customer_service,
-        dispatch_service=dispatch_service,
-        churn_service=churn_service,
-        ticket_service=ticket_service,
-        rag_retriever=rag_retriever,
-    )
+async def get_tool_executor(db: AsyncSession = Depends(get_db)) -> ToolExecutor:
+    return await build_tool_executor(db)

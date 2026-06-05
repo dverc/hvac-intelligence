@@ -10,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.api.deps import get_tool_executor
+from app.api import deps
 from app.core.config import get_settings
 from app.core.metrics import vapi_webhook_total
 from app.core.rate_limit import limiter
@@ -18,8 +18,9 @@ from app.core.database import get_session_factory
 from app.pipeline.event_bus import publish_call_active_event
 from app.schemas.organization import OrganizationSettings
 from app.services.tenant_service import TenantService
-from app.services.tool_executor import ToolExecutor
 from app.services.transcript_service import TranscriptService
+from app.services.vapi_payload import extract_phone_from_vapi_payload
+from sqlalchemy.ext.asyncio import AsyncSession
 router = APIRouter(prefix="/webhook/vapi", tags=["vapi"])
 logger = logging.getLogger(__name__)
 
@@ -70,22 +71,7 @@ def _event_type(message: dict[str, Any]) -> str:
 
 
 def _extract_phone_from_call(message: dict[str, Any]) -> Optional[str]:
-    if number := (message.get("customer") or {}).get("number"):
-        return str(number)
-    call = message.get("call", {})
-    if number := (call.get("customer") or {}).get("number"):
-        return str(number)
-    phone_number = (
-        call.get("phoneNumber")
-        or call.get("phone_number")
-        or message.get("phoneNumber")
-        or message.get("phone_number")
-    )
-    if isinstance(phone_number, dict):
-        return phone_number.get("number")
-    if isinstance(phone_number, str):
-        return phone_number
-    return None
+    return extract_phone_from_vapi_payload(message)
 
 
 async def _process_call_end_background(call_data: dict[str, Any], org_id: str) -> None:
@@ -118,7 +104,7 @@ async def _process_call_end_background(call_data: dict[str, Any], org_id: str) -
 @limiter.limit("120/minute", override_defaults=True)
 async def handle_vapi_webhook(
     request: Request,
-    tool_executor: ToolExecutor = Depends(get_tool_executor),
+    db: AsyncSession = Depends(deps.get_db),
 ) -> JSONResponse:
     settings = get_settings()
     body_bytes = await request.body()
@@ -146,15 +132,10 @@ async def handle_vapi_webhook(
     vapi_webhook_total.labels(event_type=event_type).inc()
 
     # Resolve the tenant for THIS call (per-call, never assumed process-wide).
-    tenant_service = TenantService(tool_executor.db)
+    tenant_service = TenantService(db)
     org_id = await tenant_service.resolve_org_for_call(str(call_id), message)
     org = await tenant_service.get_tenant_by_id(org_id)
     org_settings = OrganizationSettings.model_validate(org.settings or {}) if org else None
-    tool_executor.set_tenant(
-        org_id,
-        org_settings,
-        org_slug=org.slug if org is not None else None,
-    )
     if org is not None:
         logger.info(
             "Tenant resolved: %s (org_id=%s) | call_id=%s",
@@ -164,6 +145,12 @@ async def handle_vapi_webhook(
         )
 
     if event_type == "tool-calls":
+        tool_executor = await deps.build_tool_executor(db)
+        tool_executor.set_tenant(
+            org_id,
+            org_settings,
+            org_slug=org.slug if org is not None else None,
+        )
         tool_call_list = message.get("toolCallList", [])
         logger.info(
             "Vapi tool-calls raw payload (call_id=%s): %s",
@@ -174,6 +161,12 @@ async def handle_vapi_webhook(
         return JSONResponse({"results": results})
 
     if event_type in {"call-start", "call-started"}:
+        tool_executor = await deps.build_tool_executor(db)
+        tool_executor.set_tenant(
+            org_id,
+            org_settings,
+            org_slug=org.slug if org is not None else None,
+        )
         phone = _extract_phone_from_call(message)
         if not phone:
             raise HTTPException(status_code=422, detail="Missing caller phone number")

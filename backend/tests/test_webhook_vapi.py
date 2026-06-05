@@ -58,7 +58,11 @@ async def test_call_start_high_risk_injects_retention(db_session, seeded_custome
     )
 
     app.dependency_overrides[deps.get_db] = override_get_db
-    app.dependency_overrides[deps.get_tool_executor] = lambda: tool_executor
+
+    async def override_build_tool_executor(_db):
+        return tool_executor
+
+    monkeypatch.setattr(deps, "build_tool_executor", override_build_tool_executor)
 
     payload = {
         "message": {
@@ -189,3 +193,27 @@ async def test_end_of_call_report_triggers_background_transcript(api_client):
         assert response.status_code == 200
         assert response.json()["status"] == "accepted"
         mock_bg.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_speech_update_does_not_build_tool_executor(api_client, monkeypatch):
+    from app.api import deps
+
+    build_mock = AsyncMock(side_effect=AssertionError("ToolExecutor should not be built"))
+    monkeypatch.setattr("app.api.v1.webhook_vapi.deps.build_tool_executor", build_mock)
+
+    payload = {
+        "message": {
+            "type": "speech-update",
+            "call": {"id": "call-speech-1"},
+        }
+    }
+    body, signature = sign_vapi_payload(payload)
+    response = await api_client.post(
+        "/webhook/vapi",
+        content=body,
+        headers={"x-vapi-signature": signature, "content-type": "application/json"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    build_mock.assert_not_called()

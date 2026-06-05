@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --extra-index-url https://download.pytorch.org/whl/cpu \
-    torch==2.3.0+cpu transformers==4.41.1 && \
+    torch==2.3.0 transformers==4.41.1 && \
     pip install --extra-index-url https://download.pytorch.org/whl/cpu \
     -r requirements.txt
 

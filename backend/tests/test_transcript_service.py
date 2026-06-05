@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -100,3 +101,69 @@ async def test_process_completed_call_links_recent_dispatch_job(
         )
     ).scalar_one()
     assert row.dispatch_job_id == job.job_id
+
+
+@pytest.mark.asyncio
+async def test_process_completed_call_message_level_customer_and_duration(
+    db_session, seeded_customer
+):
+    """Realistic end-of-call-report: phone on message root, durationSeconds only."""
+    service = TranscriptService(db_session)
+    call_id = f"eocr-realistic-{uuid.uuid4().hex[:8]}"
+    payload = {
+        "type": "end-of-call-report",
+        "customer": {"number": seeded_customer["phone"]},
+        "durationSeconds": 142,
+        "startedAt": "2026-06-04T20:27:28Z",
+        "cost": 0.2365,
+        "call": {"id": call_id},
+        "messages": [{"role": "user", "message": "Hello"}],
+    }
+
+    with patch("app.services.transcript_service.publish_call_features", return_value=True):
+        result = await service.process_completed_call(payload, SEED_ORG_ID)
+        await db_session.commit()
+
+    assert result is not None
+    assert result["customer_id"] == seeded_customer["customer_id"]
+    assert result["duration_seconds"] == 142
+
+
+@pytest.mark.asyncio
+async def test_process_completed_call_falls_back_to_create_customer_tool_result(
+    db_session, make_org, make_customer
+):
+    org = await make_org(name="Tool Result Org")
+    customer = await make_customer(org_id=org.org_id, full_name="Jordan Lee")
+    await db_session.flush()
+
+    service = TranscriptService(db_session)
+    call_id = f"eocr-tool-{uuid.uuid4().hex[:8]}"
+    payload = {
+        "type": "end-of-call-report",
+        "durationSeconds": 90,
+        "call": {"id": call_id},
+        "artifact": {
+            "messages": [
+                {
+                    "name": "create_customer",
+                    "result": json.dumps(
+                        {
+                            "status": "created",
+                            "customer_id": str(customer.customer_id),
+                            "message": "Customer created.",
+                        }
+                    ),
+                }
+            ]
+        },
+        "messages": [{"role": "user", "message": "I am a new customer."}],
+    }
+
+    with patch("app.services.transcript_service.publish_call_features", return_value=True):
+        result = await service.process_completed_call(payload, org.org_id)
+        await db_session.commit()
+
+    assert result is not None
+    assert result["customer_id"] == str(customer.customer_id)
+    assert result["duration_seconds"] == 90

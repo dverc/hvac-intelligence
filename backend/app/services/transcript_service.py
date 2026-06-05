@@ -15,6 +15,11 @@ from app.pipeline.feature_extractor import FeatureExtractor
 from app.pipeline.kafka_producer import publish_call_features
 from app.services.churn_service import ChurnService
 from app.services.customer_service import CustomerService
+from app.services.vapi_payload import (
+    extract_call_timing,
+    extract_customer_id_from_tool_results,
+    extract_phone_from_vapi_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +45,7 @@ class TranscriptService:
         if existing.scalar_one_or_none() is not None:
             return None
 
-        phone = _extract_phone(call)
+        phone = extract_phone_from_vapi_payload(call_data)
         customer_id: Optional[uuid.UUID] = None
         churn_start: Optional[float] = None
         if phone:
@@ -52,11 +57,22 @@ class TranscriptService:
                 )
                 churn_start = score.get("churn_probability")
 
+        if customer_id is None:
+            tool_customer_id = extract_customer_id_from_tool_results(call_data)
+            if tool_customer_id:
+                try:
+                    customer_id = uuid.UUID(tool_customer_id)
+                except ValueError:
+                    logger.warning(
+                        "Ignoring invalid customer_id from tool results: %s",
+                        tool_customer_id,
+                    )
+                else:
+                    score = await self._churn.get_latest_score(tool_customer_id, org_id)
+                    churn_start = score.get("churn_probability")
+
         transcript_text = _extract_transcript_text(call_data)
-        started, ended = _extract_timestamps(call)
-        duration_seconds = (
-            int((ended - started).total_seconds()) if ended and started else None
-        )
+        started, ended, duration_seconds = extract_call_timing(call_data)
 
         transcript_json = _normalize_transcript_json(
             call_data.get("transcript") or call.get("messages") or call_data.get("messages")
@@ -257,17 +273,6 @@ def _persistence_summary(record: CallTranscript) -> dict[str, Any]:
     }
 
 
-def _extract_phone(call: dict[str, Any]) -> Optional[str]:
-    customer = call.get("customer") or {}
-    if number := customer.get("number"):
-        return str(number)
-    if phone := call.get("phoneNumber"):
-        if isinstance(phone, dict):
-            return phone.get("number")
-        return str(phone)
-    return None
-
-
 def _extract_transcript_text(call_data: dict[str, Any]) -> str:
     if text := call_data.get("transcript"):
         if isinstance(text, str):
@@ -331,23 +336,3 @@ def _infer_intervention_type(call_outcome: str, call_features) -> str:
         return "COMPLAINT_ESCALATION"
     return "VOICE_RETENTION"
 
-
-def _extract_timestamps(call: dict[str, Any]) -> tuple[datetime, Optional[datetime]]:
-    now = datetime.now(timezone.utc)
-    started = call.get("startedAt") or call.get("startTime")
-    ended = call.get("endedAt") or call.get("endTime")
-
-    def _parse(value: Any) -> Optional[datetime]:
-        if value is None:
-            return None
-        if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
-        if isinstance(value, str):
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return None
-
-    start_dt = _parse(started) or now
-    end_dt = _parse(ended)
-    return start_dt, end_dt

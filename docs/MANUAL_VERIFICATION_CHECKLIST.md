@@ -1,368 +1,182 @@
 # Manual Verification Checklist (Outside Cursor)
 
-Complete these steps **after all coding phases are submitted**. Check items off as you go.
+Last audited: **2026-06-04** (Vapi tools re-checked same day — 12/12 linked).
+
+Only **remaining** manual steps are listed below. Completed work is summarized in [Verified complete](#verified-complete-do-not-repeat) — do not repeat those unless you reset the environment.
 
 ---
 
-## Priority — Register new Vapi tools + new-customer onboarding call
+## Remaining manual steps
 
-Do these in order (Enhancement Phase 4).
+### 1. New-customer onboarding test call
 
-### 1. Add the 4 new tools in Vapi dashboard
+Call from a number **not** in `customers` (seed/import uses `+1555…`, `+15552001…`, `+19493313190`, `+19497771001–03`). Use your cell or another unlisted number.
 
-The agent **cannot** call these until they are registered in Vapi.
-
-- [ ] Open [Vapi dashboard](https://dashboard.vapi.ai) → your assistant (**HVAC Inbound Receptionist**) → **Tools** → **Add** (Function) for each tool below
-- [ ] Copy the JSON for each tool from [`docs/vapi_tool_schemas.md`](vapi_tool_schemas.md):
-  - [ ] `create_customer`
-  - [ ] `update_customer`
-  - [ ] `create_equipment`
-  - [ ] `update_dispatch`
-- [ ] Restart backend/uvicorn after saving (so the tool handlers are loaded)
-
-### 2. Test call as a new customer (unknown phone number)
-
-- [ ] Call your Vapi inbound number from a phone **not** in the database  
-  (seed data uses `+1555…` and `+15552001…` ranges — use your real cell or any number you have not seeded)
-- [ ] During the call, confirm the **onboarding flow** kicks in (agent treats you as unknown, collects info, uses `create_customer`)
-- [ ] After the call ends, confirm a **new row** in `customers`
-
-**Run this to verify** (replace `+1XXXXXXXXXX` with the number you called from):
-
-```bash
-docker compose exec postgres psql -U hvac_user -d hvac_intel -c \
-  "SELECT customer_id, full_name, phone_primary, account_status, created_at
-   FROM customers
-   WHERE phone_primary = '+1XXXXXXXXXX'
-   ORDER BY created_at DESC;"
-```
-
-Or list the most recently created customers:
+- [ ] Onboarding flow audible on the call (`create_customer` path)
+- [ ] After call end, new row in `customers`:
 
 ```bash
 docker compose exec postgres psql -U hvac_user -d hvac_intel -c \
   "SELECT customer_id, full_name, phone_primary, created_at
    FROM customers
-   ORDER BY created_at DESC
-   LIMIT 5;"
+   WHERE phone_primary = '+1XXXXXXXXXX'
+   ORDER BY created_at DESC;"
 ```
 
-- [ ] New customer row exists with the caller's phone and name from the call
-- [ ] Optional: open that customer in the dashboard → **Call History** shows the onboarding call
+- [ ] Optional: customer detail page → **Call History** shows the onboarding call
 
 ---
 
-This covers:
-- **Tech Spec Phases 0–8** (original build in `HVAC_Intelligence_Project_Aero_TechSpec.md`)
-- **Enhancement Phases 1–4** (transcript persistence, Call History UI, auth, new voice tools)
+### 2. ML feature pipeline (Kafka + Celery)
 
----
+Postgres shows `feature_store = 0`. Uvicorn logs show `Kafka unavailable; dispatching Celery task directly` — Celery worker may not be running.
 
-## Part A — One-time local environment setup
-
-Do this once before any phase verification.
-
-- [ ] **Copy env templates**
-  - `cp .env.example .env` (project root)
-  - `cp frontend/.env.example frontend/.env.local`
-- [ ] **Generate dashboard API key** (must match frontend ↔ backend):
-  ```bash
-  openssl rand -hex 32
-  ```
-  - Set `DASHBOARD_API_KEY=` in root `.env`
-  - Set `NEXT_PUBLIC_API_KEY=` to the **same value** in `frontend/.env.local`
-- [ ] **Fill remaining `.env` values** (see `.env.example` comments):
-  - `POSTGRES_PASSWORD`, `DATABASE_URL`
-  - `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
-  - `VAPI_API_KEY`, `VAPI_ASSISTANT_ID`, `VAPI_WEBHOOK_SECRET`
-  - `PINECONE_API_KEY`, `PINECONE_ENVIRONMENT`, `PINECONE_INDEX_NAME`
-  - `REDIS_URL`, `KAFKA_BOOTSTRAP_SERVERS`
-- [ ] **Start infrastructure**
-  ```bash
-  docker compose up -d postgres redis
-  ```
-- [ ] **Migrate and seed**
-  ```bash
-  cd backend && alembic upgrade head && cd ..
-  python scripts/seed_database.py
-  ```
-- [ ] **Smoke check**
-  ```bash
-  curl -sf http://localhost:8000/health
-  ```
-
----
-
-## Part B — Vapi dashboard & live-call plumbing (do once, re-verify after tool changes)
-
-These are **manual steps in the [Vapi dashboard](https://dashboard.vapi.ai)** and your terminal — not in Cursor.
-
-### B.1 Assistant & phone number
-
-- [ ] Create or confirm assistant **"HVAC Inbound Receptionist"**; copy ID → `VAPI_ASSISTANT_ID` in `.env`
-- [ ] Attach that assistant to your inbound **phone number** (fixed-assistant pattern — Vapi sends `call-started`, not `assistant-request`)
-- [ ] Set assistant **Server URL** (webhook) to your public backend:
-  - **Local dev:** run ngrok (or similar) and point at `https://<your-tunnel>/webhook/vapi`
-  - **Production:** `https://<your-domain>/webhook/vapi`
-- [ ] Set assistant **first message** in the dashboard (not via webhook):
-  ```
-  Hi {{customer_name}}, thank you for calling. I see your {{equipment_info}} on file. How can I help you today?
-  ```
-- [ ] Set assistant **system prompt** to use template variables injected by the webhook:
-  - `{{call_id}}`, `{{customer_name}}`, `{{customer_id}}`, `{{account_status}}`
-  - `{{equipment_info}}`, `{{open_tickets}}`, `{{churn_risk}}`, `{{retention_protocol}}`
-  - Ensure the prompt tells the model to follow injected context and use tools
-
-### B.2 Tool definitions (Assistant → Tools → Function)
-
-**Original six tools** (tech spec §4.2 — should already exist):
-
-- [ ] `get_customer_info`
-- [ ] `get_equipment_info`
-- [ ] `schedule_dispatch`
-- [ ] `query_churn_score`
-- [ ] `rag_knowledge_query`
-- [ ] `create_support_ticket`
-
-**Four new tools** (Enhancement Phase 4 — **required before live onboarding works**):
-
-Go to assistant → **Tools** → add each Function using JSON from `docs/vapi_tool_schemas.md`. The agent cannot invoke them until registered here.
-
-- [ ] `create_customer`
-- [ ] `update_customer`
-- [ ] `create_equipment`
-- [ ] `update_dispatch`
-
-Each tool's server URL must reach your backend webhook (Vapi routes tool calls to `/webhook/vapi`).
-
-### B.3 Webhook security (local vs production)
-
-- [ ] **Local dev:** `VAPI_WEBHOOK_HMAC_BYPASS=true` and/or `VAPI_WEBHOOK_SECRET=disabled` in `.env` (never use in production)
-- [ ] **Production:** set a real `VAPI_WEBHOOK_SECRET` in Vapi dashboard **and** `.env`; set `VAPI_WEBHOOK_HMAC_BYPASS=false`; remove `disabled` bypass
-
-### B.4 After any backend or tool change
-
-- [ ] Restart backend so it picks up code + env:
-  ```bash
-  # if using compose
-  docker compose restart backend
-  # or if running uvicorn directly
-  cd backend && uvicorn app.main:app --reload
-  ```
-
----
-
-## Part C — Tech Spec Phase 0: Scaffold & environment
-
-- [ ] Confirm `docker compose up --build` starts without errors (postgres, redis, kafka, backend, celery-worker, frontend)
-- [ ] Confirm `curl http://localhost:8000/health` returns 200
-- [ ] Confirm frontend loads at http://localhost:3000
-
----
-
-## Part D — Tech Spec Phase 1: Database layer
-
-- [ ] Run `alembic upgrade head` on a fresh Postgres — no migration errors
-- [ ] Run `python scripts/seed_database.py` — 10 customers, 2 technicians, 5 transcripts seeded
-- [ ] Optional: inspect tables in psql/pgAdmin (`customers`, `call_transcripts`, `churn_scores`, etc.)
-
----
-
-## Part E — Tech Spec Phase 2: Vapi webhook & tool execution
-
-- [ ] Start backend; expose via ngrok if testing live calls
-- [ ] **Postman smoke:** `POST /webhook/vapi` with a signed or bypassed payload (see `backend/tests/conftest.py` `sign_vapi_payload`)
-- [ ] **Live call:** place a test call; confirm in uvicorn logs:
-  - [ ] `call-started` (or `call-start`) event — no 401
-  - [ ] `tool-calls` events when the agent uses tools — no `Unknown tool`
-  - [ ] Customer context logged (name, churn tier)
-- [ ] Ask the agent to schedule dispatch — confirm a row appears in `dispatch_jobs`
-
----
-
-## Part F — Tech Spec Phase 3: RAG pipeline
-
-- [ ] **Mock index (local, no Pinecone bill):**
-  ```bash
-  python scripts/index_knowledge_base.py \
-    --namespace faq_general \
-    --source data/knowledge/faqs/ \
-    --mock
-  ```
-- [ ] **Optional — real Pinecone:**
-  - [ ] Create Pinecone index `hvac-knowledge` (dim 1536, cosine)
-  - [ ] Index all namespaces: `faq_general`, `equipment_manuals`, `warranty_terms`, `troubleshooting`, `pricing`
-  - [ ] Drop PDFs into `data/knowledge/manuals/` before indexing manuals namespace
-- [ ] **Live call test:** ask a FAQ question; confirm `rag_knowledge_query` returns context in uvicorn logs
-
----
-
-## Part G — Tech Spec Phase 4: ML feature pipeline (Kafka + Celery)
-
-- [ ] Start full stack:
+- [ ] Start pipeline services:
   ```bash
   docker compose up -d kafka celery-worker
   ```
-  Or manually:
-  ```bash
-  celery -A app.pipeline.celery_app worker -Q features,scoring -c 4 --loglevel=info
-  ```
-- [ ] **After a live call ends**, confirm in logs/DB:
-  - [ ] Celery task `process_call_features` runs
-  - [ ] Row in `feature_store` for the customer
-  - [ ] New or updated row in `churn_scores` (or `model_not_trained` if no artifacts yet)
-- [ ] **Optional — train churn model** (when labeled data exists):
-  ```bash
-  python ml/training/train_churn_model.py
-  ```
-  Then restart backend + celery-worker to load `ml/artifacts/*.pkl`
-- [ ] **Manual batch rescore smoke:**
-  ```bash
-  cd backend
-  celery -A app.pipeline.celery_app call app.pipeline.tasks.batch_rescore_customers
-  ```
+  Or run Celery manually from `backend/` (see `docs/RUNBOOK.md`).
+- [ ] Place a live call (or replay call-end webhook); confirm:
+  - [ ] `process_call_features` runs in Celery logs
+  - [ ] Row appears in `feature_store`
+  - [ ] `churn_scores` updates (or `model_not_trained` if no `ml/artifacts/*.pkl`)
+
+**Optional (when labeled data exists):**
+
+- [ ] `python ml/training/train_churn_model.py` → deploy artifacts → restart backend + Celery
+- [ ] Batch rescore smoke: `celery -A app.pipeline.celery_app call app.pipeline.tasks.batch_rescore_customers`
 
 ---
 
-## Part H — Tech Spec Phase 5: Analytics API & SSE
+### 3. RAG live-call verification
 
-- [ ] Open dashboard Overview — **Live Activity Feed** connects (SSE indicator green)
-- [ ] Trigger a call or batch rescore — event appears in the feed without page refresh
-- [ ] Confirm API endpoints respond (with `X-API-Key` header):
-  - `GET /api/v1/analytics/churn-distribution`
-  - `GET /api/v1/analytics/saved-by-ai`
-  - `GET /api/v1/stream/churn-events`
+Mock index exists (`data/knowledge/.mock_vector_index.json`). No `rag_knowledge_query` execution seen in recent uvicorn logs.
 
----
+- [ ] On a live call, ask a FAQ/pricing question; confirm `rag_knowledge_query` in uvicorn logs with retrieved context
 
-## Part I — Tech Spec Phase 6: Next.js frontend dashboard
+**Optional — real Pinecone (keys are set):**
 
-- [ ] `cd frontend && npm install && npm run dev`
-- [ ] Set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` in `frontend/.env.local`
-- [ ] Set `NEXT_PUBLIC_API_KEY` (same as `DASHBOARD_API_KEY`)
-- [ ] Browse and confirm pages load with data:
-  - [ ] `/dashboard` — KPI donut, live feed, Saved by AI metrics
-  - [ ] `/dashboard/customers` — search and pagination
-  - [ ] `/dashboard/customers/[id]` — churn timeline
-  - [ ] `/dashboard/analytics` — cohort / retention views
+- [ ] Index all namespaces: `faq_general`, `equipment_manuals`, `warranty_terms`, `troubleshooting`, `pricing`
+- [ ] Add equipment manual PDFs under `data/knowledge/manuals/` before indexing manuals namespace
 
 ---
 
-## Part J — Tech Spec Phase 7: Testing & observability
+### 4. Dashboard SSE live feed (browser)
 
-- [ ] Run test suite locally:
-  ```bash
-  cd backend && pytest tests/ -v --cov=app --cov-report=term-missing
-  ```
-- [ ] Start Prometheus + Grafana:
-  ```bash
-  docker compose up -d prometheus grafana
-  ```
-  - Prometheus: http://localhost:9090
-  - Grafana: http://localhost:3001 (admin / `GRAFANA_PASSWORD` from `.env`)
-- [ ] **Build or import Grafana dashboard** covering:
-  - `vapi_webhook_total`
-  - `tool_execution_latency_seconds`
-  - `churn_scoring_latency_seconds`
-  - `high_risk_accounts_total`
-  - `saved_by_ai_total`
-  - `rag_retrieval_latency_seconds`
-- [ ] Confirm app metrics scrape: http://localhost:8000/metrics
+API auth works; SSE not manually verified in browser this session.
+
+- [ ] Open `/dashboard` → **Live Activity Feed** shows connected (green)
+- [ ] Trigger a call or batch rescore → event appears without refresh
 
 ---
 
-## Part K — Tech Spec Phase 8: Production deployment
+### 5. Observability (Grafana)
 
-- [ ] **GitHub:** create public repo `hvac-intelligence`, push local code, confirm CI workflow green
-- [ ] **Kubernetes (if deploying):**
-  - [ ] Copy `infra/k8s/secrets.yaml.template` → `secrets.yaml`; replace all `REPLACE_ME`
-  - [ ] Set production hostname in `infra/k8s/ingress.yaml`
-  - [ ] `kubectl apply -f infra/k8s/namespace.yaml` then remaining manifests
-  - [ ] Set GitHub secret `KUBECONFIG` for deploy workflow
-- [ ] **Secrets:** migrate from `.env` to AWS Secrets Manager / Vault (no `.env` in prod)
-- [ ] **Pre-production gates** (`docs/PRE_PRODUCTION_CHECKLIST.md`):
-  - [ ] Webhook p99 < 200 ms (Prometheus or load test)
-  - [ ] RAG p99 < 800 ms
-  - [ ] SSE stable 1 h+ with 50 concurrent connections
-  - [ ] Feature pipeline lag < 30 s after call end
-  - [ ] Batch rescore SLA on 500-account corpus
-  - [ ] Alembic idempotent on prod schema clone
-  - [ ] Churn model AUC-ROC ≥ 0.78 (when trained)
+Prometheus/Grafana not running in Docker (only postgres + redis up). `/metrics` returns 200.
+
+- [ ] `docker compose up -d prometheus grafana`
+- [ ] Build or import Grafana dashboard for: `vapi_webhook_total`, `tool_execution_latency_seconds`, `churn_scoring_latency_seconds`, `high_risk_accounts_total`, `saved_by_ai_total`, `rag_retrieval_latency_seconds`
 
 ---
 
-## Part L — Enhancement Phase 1: Transcript persistence fix
+### 6. Production deployment & pre-production gates
 
-- [ ] Restart backend after deploy
-- [ ] Place a **live test call**
-- [ ] Confirm uvicorn logs show `end-of-call-report` (not just `call-end`)
-- [ ] Confirm persistence summary logged after call end
-- [ ] Confirm row in `call_transcripts` with enrichment fields (recording URL, summary, cost, etc.)
+GitHub repo and CI are green. K8s and performance gates are not done.
 
----
-
-## Part M — Enhancement Phase 2: Transcript API + Call History UI
-
-- [ ] With backend + frontend running and API key configured:
-  - [ ] `GET /api/v1/customers/{id}/transcripts` returns full transcript list (via curl/Postman with `X-API-Key`)
-  - [ ] `GET /api/v1/calls/{call_id}` returns transcript detail
-- [ ] In browser: open a customer detail page → **Call History** tab
-  - [ ] Past calls listed with date, duration, outcome
-  - [ ] Expand a call — transcript text visible
-  - [ ] Recording player works if Vapi provided a recording URL
+- [ ] **Kubernetes (if deploying):** copy `infra/k8s/secrets.yaml.template` → `secrets.yaml`, set ingress hostname, `kubectl apply`
+- [ ] **Secrets:** migrate from `.env` to AWS Secrets Manager / Vault for production
+- [ ] **Pre-production gates** (`docs/PRE_PRODUCTION_CHECKLIST.md`): webhook p99, RAG p99, SSE 1h/50 conn, feature lag <30s, batch rescore SLA, Alembic on prod clone, churn AUC ≥ 0.78
 
 ---
 
-## Part N — Enhancement Phase 3: Authentication + HMAC hardening
+### 7. Optional live tool exercises
 
-- [ ] Confirm `DASHBOARD_API_KEY` set in root `.env`
-- [ ] Confirm `NEXT_PUBLIC_API_KEY` matches in `frontend/.env.local`
-- [ ] Restart frontend (`npm run dev`) after env change
-- [ ] Dashboard loads without "API key not configured" error
-- [ ] Confirm unauthenticated API calls return 401:
-  ```bash
-  curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/v1/customers
-  # expect 401
-  ```
-- [ ] **Pre–Enhancement Phase 4 live call** (auth regression check):
-  - [ ] Webhook events in uvicorn logs (no 401 — webhook uses HMAC/bypass, not API key)
-  - [ ] Transcript persisted on call end
-  - [ ] Call visible on customer detail **Call History** tab
+All 12 tools are linked; exercise these on live calls when convenient:
+
+- [ ] `create_customer` — covered by step 1 (new-customer onboarding call)
+- [ ] `update_customer` — caller corrects address or phone mid-call
+- [ ] `update_dispatch` — caller changes or cancels a booking
+- [ ] `create_equipment` — register a unit for a new or existing customer
+- [ ] `check_availability` / `lookup_service_info` — scheduling and pricing flows
 
 ---
 
-## Part O — Enhancement Phase 4: New voice tools (create/update customer, equipment, dispatch)
+## Verified complete (do not repeat)
 
-See **Priority** section at the top for the two-step flow (register tools → new-customer test call + SQL verify).
+Evidence sources noted in parentheses.
 
-- [ ] Add the **4 new tool definitions** in Vapi dashboard (see Part B.2 and `docs/vapi_tool_schemas.md`) — agent cannot call them until registered
-- [ ] **Restart uvicorn/backend** so tool registry picks up handlers
-- [ ] **Live E2E call — known customer** (e.g. seeded phone `+19493313190`):
-  - [ ] Webhook events in logs — no 401, no unknown-tool errors
-  - [ ] Agent speaks personalized greeting using `{{customer_name}}` / `{{equipment_info}}`
-  - [ ] Transcript persisted on call end
-  - [ ] Call visible on customer detail **Call History** tab
-- [ ] **Live E2E call — unknown caller / new customer** (number **not** in `customers` — see Priority section):
-  - [ ] Onboarding flow audible on the call (`create_customer` path)
-  - [ ] `SELECT … FROM customers WHERE phone_primary = '<your test number>'` returns a new row (or appears in `ORDER BY created_at DESC LIMIT 5`)
-  - [ ] Transcript + Call History reflect the new account
-- [ ] **Optional tool exercises on a live call:**
-  - [ ] `update_customer` — caller corrects address or phone
-  - [ ] `update_dispatch` — caller changes or cancels a booking
+### Environment & infrastructure
 
----
+| Item | Evidence |
+|------|----------|
+| Root `.env` created and populated | `.env` has all keys (Vapi, Pinecone, DB, API keys) |
+| `frontend/.env.local` with matching API key | `NEXT_PUBLIC_API_KEY` = `DASHBOARD_API_KEY` |
+| Postgres + Redis running | `docker compose ps` — both Up 24h+ |
+| Alembic at head | `alembic_version`: `014_org_drive_folder` |
+| DB seeded | 14 customers, 9 transcripts, 4 dispatch jobs, 6 churn scores |
+| Health smoke | `curl localhost:8000/health` → 200 |
+| Backend running | uvicorn terminal 26, `--reload` on :8000 |
+| ngrok tunnel | terminal 23 → `stonework-congenial-booth.ngrok-free.dev` → :8000 |
+| Frontend running | `npm run dev` terminal 27; `/dashboard` → 200 |
 
-## Part P — Final end-to-end demo checklist
+### Vapi dashboard & live-call plumbing
 
-Run this once everything above passes.
+| Item | Evidence |
+|------|----------|
+| Assistant **HVAC Inbound Receptionist** | Vapi API; `VAPI_ASSISTANT_ID` in `.env` |
+| Phone +19498800687 → assistant attached | Vapi phone-number API |
+| Webhook URL → ngrok `/webhook/vapi` | Assistant + phone `server.url` |
+| Dashboard `firstMessage` with `{{customer_name}}`, `{{equipment_info}}` | Vapi assistant config |
+| System prompt with template variables + onboarding rules | Vapi `model.messages[0].content` |
+| **All 12 tools linked to assistant** | Vapi API 2026-06-04: `toolIds` count = 12, account tools = 12, 0 unlinked — `check_availability`, `create_customer`, `create_equipment`, `create_support_ticket`, `get_customer_info`, `get_equipment_info`, `lookup_service_info`, `query_churn_score`, `rag_knowledge_query`, `schedule_dispatch`, `update_customer`, `update_dispatch` |
+| Local HMAC bypass | `VAPI_WEBHOOK_HMAC_BYPASS=true`, `VAPI_WEBHOOK_SECRET=disabled` |
 
-- [ ] `docker compose up --build` (or backend + frontend + celery + kafka individually)
-- [ ] Dashboard at http://localhost:3000 — all pages load with auth
-- [ ] Live inbound call → tools execute → transcript saved → Call History updated
-- [ ] Churn score updates in Celery logs / customer detail (or `model_not_trained` acknowledged)
-- [ ] SSE live feed shows call activity
-- [ ] Grafana dashboards show webhook and scoring metrics
-- [ ] CI green on GitHub
+### Live calls & webhook (Phases 2, L, N, O partial)
+
+| Item | Evidence |
+|------|----------|
+| Webhooks 200 OK, no 401 | ngrok + uvicorn logs 2026-06-03/04 |
+| `end-of-call-report` handled | uvicorn: `Vapi event: end-of-call-report` |
+| Transcripts persisted with enrichment | 4 live rows: `has_recording`, `has_summary`, `has_cost` = true |
+| `get_customer_info` tool executed | uvicorn: `Executing Vapi tool … name=get_customer_info` |
+| No `Unknown tool` errors | Recent logs clean |
+| Dispatch jobs from live calls | 3× `AC_NO_COOLING` for Daniel V (2026-06-04) |
+| Known-customer E2E (Daniel V +19493313190) | 4 live transcripts linked to customer `18ea568c…` |
+
+### Auth (Phase 3)
+
+| Item | Evidence |
+|------|----------|
+| `DASHBOARD_API_KEY` set | `.env` |
+| Unauthenticated API → 401 | `GET /api/v1/customers` → 401 |
+| Authenticated API → 200 | same with `X-API-Key` → 200 |
+
+### Transcript API + Call History (Phase 2)
+
+| Item | Evidence |
+|------|----------|
+| `GET …/customers/{id}/transcripts` | 4 items for Daniel V |
+| `GET /api/v1/calls/{call_id}` | Returns transcript JSON for live call |
+
+### RAG mock index (Phase 3 partial)
+
+| Item | Evidence |
+|------|----------|
+| Mock FAQ index built | `data/knowledge/.mock_vector_index.json` exists (~49k lines) |
+
+### Tests & CI (Phases 7–8 partial)
+
+| Item | Evidence |
+|------|----------|
+| pytest suite | **145 passed** (2026-06-04) |
+| GitHub repo + CI green | `dverc/hvac-intelligence`; latest CI + Deploy success |
+| App metrics endpoint | `GET /metrics` → 200 |
+
+### Analytics API (Phase 5 partial)
+
+| Item | Evidence |
+|------|----------|
+| `GET /api/v1/analytics/churn-distribution` | 200 with API key |
 
 ---
 

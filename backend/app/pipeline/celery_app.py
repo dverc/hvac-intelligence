@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -56,7 +60,15 @@ def _launch_kafka_consumer(**kwargs) -> None:
     """Start Kafka consumer thread when Celery worker boots (§6 Phase 4)."""
     import threading
 
-    from app.pipeline.kafka_consumer import start_feature_consumer
+    try:
+        from app.pipeline.kafka_consumer import start_feature_consumer
+    except ImportError as exc:
+        logger.warning(
+            "Kafka consumer not started — kafka-python unavailable (%s). "
+            "Celery direct task dispatch still works.",
+            exc,
+        )
+        return
 
     thread = threading.Thread(
         target=start_feature_consumer,
@@ -64,3 +76,4 @@ def _launch_kafka_consumer(**kwargs) -> None:
         daemon=True,
     )
     thread.start()
+    logger.info("Kafka feature consumer thread launched")

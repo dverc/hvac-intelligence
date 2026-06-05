@@ -167,7 +167,11 @@ async def test_call_start_resolves_tenant_by_called_number(
         rag_retriever=AsyncMock(spec=RAGRetriever),
     )
     app.dependency_overrides[deps.get_db] = override_get_db
-    app.dependency_overrides[deps.get_tool_executor] = lambda: tool_executor
+
+    async def override_build_tool_executor(_db):
+        return tool_executor
+
+    monkeypatch.setattr(deps, "build_tool_executor", override_build_tool_executor)
 
     payload = {
         "message": {

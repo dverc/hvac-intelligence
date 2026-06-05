@@ -653,16 +653,13 @@ async def api_client(
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
-    # The webhook builds TenantService(tool_executor.db); give the mock a real session.
-    mock_tool_executor.db = db_session
-
-    async def override_tool_executor():
+    async def override_build_tool_executor(_db):
         return mock_tool_executor
 
     monkeypatch.setattr(event_bus, "publish_call_active_event", AsyncMock())
 
     app.dependency_overrides[deps.get_db] = override_get_db
-    app.dependency_overrides[deps.get_tool_executor] = override_tool_executor
+    monkeypatch.setattr(deps, "build_tool_executor", override_build_tool_executor)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
