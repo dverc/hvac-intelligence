@@ -87,4 +87,11 @@ app.include_router(google_oauth_router)
 app.include_router(jobber_oauth_router)
 app.include_router(api_router, dependencies=[Depends(verify_api_key)])
 
-Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+Instrumentator().instrument(app)
+
+
+@app.get("/metrics", include_in_schema=False, dependencies=[Depends(verify_api_key)])
+async def metrics() -> Response:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

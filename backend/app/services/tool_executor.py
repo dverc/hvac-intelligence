@@ -95,6 +95,18 @@ def _is_unresolved_template(value: Any) -> bool:
     return isinstance(value, str) and value.strip().startswith("{{")
 
 
+_REDACT_KEYWORDS = ("phone", "number", "mobile", "email", "address", "name", "full_name")
+
+
+def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(args)
+    for key in redacted:
+        key_lower = key.lower()
+        if any(keyword in key_lower for keyword in _REDACT_KEYWORDS):
+            redacted[key] = "[REDACTED]"
+    return redacted
+
+
 class ToolExecutor:
     def __init__(
         self,
@@ -146,7 +158,7 @@ class ToolExecutor:
             "Executing Vapi tool call id=%s name=%s args=%s",
             tool_call_id,
             tool_name,
-            args,
+            _redact_args(args),
         )
 
         # FAIL CLOSED: never run a tenant-scoped write/read without a resolved org.
