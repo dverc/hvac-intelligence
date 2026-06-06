@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select, text
 
 from app.ml.churn_schema import FEATURE_ORDER
 from app.ml.feature_builder import FeatureBuilder
@@ -25,6 +25,7 @@ from app.models.technician import Technician
 from app.pipeline.celery_app import celery_app
 from app.core.metrics import saved_by_ai_counter
 from app.services.sms_service import build_booking_confirmation_sms, send_sms
+from app.services.email_service import build_weekly_report_html, send_email
 from app.pipeline.event_bus import (
     publish_batch_score_complete_sync,
     publish_intervention_complete_sync,
@@ -718,3 +719,164 @@ async def _sync_google_drive_folders_async() -> dict[str, Any]:
         "files_synced": total_synced,
         "summaries": summaries,
     }
+
+
+def _transcript_is_escalated(transcript: CallTranscript) -> bool:
+    if transcript.escalation_detected:
+        return True
+    for field in (transcript.call_summary, transcript.transcript_raw):
+        if field and "escalat" in field.lower():
+            return True
+    if transcript.call_outcome and "escalat" in transcript.call_outcome.lower():
+        return True
+    return False
+
+
+def _compute_weekly_stats(
+    session,
+    org_id: uuid.UUID,
+    week_start: datetime,
+    week_end: datetime,
+) -> dict[str, Any]:
+    from calendar import day_name
+    from collections import Counter
+
+    transcripts = session.scalars(
+        select(CallTranscript).where(
+            CallTranscript.org_id == org_id,
+            CallTranscript.call_start_utc >= week_start,
+            CallTranscript.call_start_utc < week_end,
+        )
+    ).all()
+
+    total_calls = len(transcripts)
+    calls_booked = sum(1 for t in transcripts if t.dispatch_job_id is not None)
+    calls_escalated = sum(1 for t in transcripts if _transcript_is_escalated(t))
+
+    new_customers = (
+        session.scalar(
+            select(func.count())
+            .select_from(Customer)
+            .where(
+                Customer.org_id == org_id,
+                Customer.created_at >= week_start,
+                Customer.created_at < week_end,
+            )
+        )
+        or 0
+    )
+
+    churn_risk_high = (
+        session.scalar(
+            select(func.count())
+            .select_from(Customer)
+            .where(
+                Customer.org_id == org_id,
+                or_(
+                    func.upper(Customer.metadata_["churn_tier"].astext).in_(
+                        ["HIGH", "CRITICAL"]
+                    ),
+                    func.lower(Customer.metadata_["churn_risk"].astext).in_(
+                        ["high", "critical"]
+                    ),
+                ),
+            )
+        )
+        or 0
+    )
+
+    day_counts = Counter(t.call_start_utc.weekday() for t in transcripts)
+    if day_counts:
+        busiest_day = day_name[day_counts.most_common(1)[0][0]]
+    else:
+        busiest_day = "N/A"
+
+    issue_types = session.scalars(
+        select(DispatchJob.issue_type).where(
+            DispatchJob.org_id == org_id,
+            DispatchJob.created_at >= week_start,
+            DispatchJob.created_at < week_end,
+        )
+    ).all()
+    issue_counts = Counter(issue for issue in issue_types if issue)
+    top_issue_type = issue_counts.most_common(1)[0][0] if issue_counts else "N/A"
+
+    return {
+        "total_calls": total_calls,
+        "calls_booked": calls_booked,
+        "calls_escalated": calls_escalated,
+        "new_customers": int(new_customers),
+        "churn_risk_high": int(churn_risk_high),
+        "busiest_day": busiest_day,
+        "top_issue_type": top_issue_type.replace("_", " ").title()
+        if top_issue_type != "N/A"
+        else top_issue_type,
+    }
+
+
+@celery_app.task(name="app.pipeline.tasks.send_weekly_client_reports", **_STANDARD_TASK_RETRY)
+def send_weekly_client_reports(self) -> dict[str, Any]:
+    """Email each active org a weekly summary of AI receptionist activity."""
+    logger.info(
+        "Task starting: send_weekly_client_reports attempt=%s",
+        self.request.retries + 1,
+    )
+    session = get_sync_session()
+    sent = 0
+    failed = 0
+    skipped = 0
+    try:
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+
+        orgs = session.scalars(
+            select(Organization).where(
+                Organization.is_active.is_(True),
+                text("settings->>'notification_email' IS NOT NULL"),
+                text("settings->>'notification_email' != ''"),
+            )
+        ).all()
+
+        for org in orgs:
+            notification_email = str(
+                (org.settings or {}).get("notification_email", "")
+            ).strip()
+            if not notification_email:
+                skipped += 1
+                continue
+
+            try:
+                stats = _compute_weekly_stats(session, org.org_id, week_start, now)
+                html_body, text_body = build_weekly_report_html(org.org_name, stats)
+                subject = f"Weekly AI Receptionist Report — {org.org_name}"
+                if send_email(notification_email, subject, html_body, text_body):
+                    sent += 1
+                    logger.info(
+                        "Weekly report sent to %s for org %s",
+                        notification_email,
+                        org.org_name,
+                    )
+                else:
+                    failed += 1
+                    logger.warning(
+                        "Weekly report not sent for org %s (%s)",
+                        org.org_name,
+                        notification_email,
+                    )
+            except Exception:
+                failed += 1
+                logger.exception("Weekly report failed for org %s", org.org_id)
+
+        return {
+            "status": "ok",
+            "sent": sent,
+            "failed": failed,
+            "skipped": skipped,
+            "orgs_processed": len(orgs),
+        }
+    except Exception as exc:
+        session.rollback()
+        logger.exception("send_weekly_client_reports failed: %s", exc)
+        raise
+    finally:
+        session.close()

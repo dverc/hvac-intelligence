@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM_NUMBER: str = ""
+
+    # Email reports (SendGrid — optional; empty disables outbound email)
+    SENDGRID_API_KEY: str = ""
+    REPORT_FROM_EMAIL: str = "reports@hvac-intelligence.com"
+    REPORT_FROM_NAME: str = "HVAC Intelligence"
     
     # Vector DB
     PINECONE_API_KEY: str

@@ -48,6 +48,10 @@ celery_app.conf.update(
             "task": "app.pipeline.tasks.sync_google_drive_folders",
             "schedule": crontab(minute="*/30"),
         },
+        "send-weekly-client-reports": {
+            "task": "app.pipeline.tasks.send_weekly_client_reports",
+            "schedule": crontab(hour=8, minute=0, day_of_week=1),
+        },
     },
 )
 
