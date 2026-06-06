@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.api import deps
+from app.core.cache import ORG_CACHE_TTL, cache_get, cache_set, org_cache_key
 from app.core.config import get_settings
 from app.core.constants import SEED_ORG_ID
 from app.core.metrics import vapi_webhook_total
@@ -211,12 +212,24 @@ async def handle_vapi_webhook(
                 )
                 call_start_org_id = SEED_ORG_ID
 
+            cached_org_settings = await cache_get(org_cache_key(str(call_start_org_id)))
             call_start_org = await tenant_service.get_tenant_by_id(call_start_org_id)
-            call_start_org_settings = (
-                OrganizationSettings.model_validate(call_start_org.settings or {})
-                if call_start_org is not None
-                else None
-            )
+            if cached_org_settings is not None:
+                call_start_org_settings = OrganizationSettings.model_validate(
+                    cached_org_settings
+                )
+            elif call_start_org is not None:
+                settings_dict = dict(call_start_org.settings or {})
+                call_start_org_settings = OrganizationSettings.model_validate(
+                    settings_dict
+                )
+                await cache_set(
+                    org_cache_key(str(call_start_org_id)),
+                    settings_dict,
+                    ORG_CACHE_TTL,
+                )
+            else:
+                call_start_org_settings = None
 
             tool_executor = await deps.build_tool_executor(db)
             tool_executor.set_tenant(
@@ -263,7 +276,11 @@ async def handle_vapi_webhook(
 
             system_prompt = enrichment["system_prompt_injection"]
             if call_start_org is not None:
-                org_settings_dict = call_start_org.settings or {}
+                org_settings_dict = (
+                    cached_org_settings
+                    if cached_org_settings is not None
+                    else dict(call_start_org.settings or {})
+                )
                 if not is_within_business_hours(org_settings_dict):
                     hours_context = get_hours_context(org_settings_dict)
                     system_prompt = (

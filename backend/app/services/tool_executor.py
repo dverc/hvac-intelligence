@@ -10,6 +10,13 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import (
+    CUSTOMER_CACHE_TTL,
+    cache_delete,
+    cache_get,
+    cache_set,
+    customer_cache_key,
+)
 from app.core.metrics import observe_tool_execution
 from app.models.organization import Organization
 from app.rag.constants import get_base_namespace, get_namespace
@@ -32,7 +39,7 @@ from app.schemas.tools import (
 )
 from app.services.availability_service import AvailabilityService
 from app.services.churn_service import ChurnService
-from app.services.customer_service import CustomerService
+from app.services.customer_service import CustomerService, normalize_phone
 from app.services.dispatch_service import DispatchService
 from app.services.equipment_service import EquipmentService
 from app.services.service_area_service import is_address_serviceable
@@ -378,9 +385,24 @@ class ToolExecutor:
 
     async def execute_get_customer_info(self, **kwargs: Any) -> str:
         parsed = GetCustomerInfoArgs.model_validate(kwargs)
+        if parsed.lookup_method == "phone" and self.org_id is not None:
+            cache_key = customer_cache_key(
+                str(self.org_id), normalize_phone(parsed.lookup_value)
+            )
+            cached_profile = await cache_get(cache_key)
+            if cached_profile is not None:
+                return json.dumps(cached_profile)
+
         profile = await self.customer_service.get_customer_info(
             parsed.lookup_method, parsed.lookup_value, self.org_id
         )
+
+        if parsed.lookup_method == "phone" and self.org_id is not None:
+            cache_key = customer_cache_key(
+                str(self.org_id), normalize_phone(parsed.lookup_value)
+            )
+            await cache_set(cache_key, profile, CUSTOMER_CACHE_TTL)
+
         return json.dumps(profile)
 
     async def execute_get_equipment_info(self, **kwargs: Any) -> str:
@@ -580,6 +602,10 @@ class ToolExecutor:
 
         update_payload = CustomerUpdate(**payload_data)
 
+        existing_customer = await self.customer_service.get_by_id(
+            uuid.UUID(parsed.customer_id), self.org_id
+        )
+
         customer = await self.customer_service.update_customer(
             uuid.UUID(parsed.customer_id),
             update_payload,
@@ -587,6 +613,20 @@ class ToolExecutor:
         )
         if customer is None:
             return json.dumps({"error": f"Customer {parsed.customer_id} not found"})
+
+        if self.org_id is not None:
+            if existing_customer is not None:
+                await cache_delete(
+                    customer_cache_key(
+                        str(self.org_id),
+                        normalize_phone(existing_customer.phone_primary),
+                    )
+                )
+            await cache_delete(
+                customer_cache_key(
+                    str(self.org_id), normalize_phone(customer.phone_primary)
+                )
+            )
 
         return json.dumps(
             {
