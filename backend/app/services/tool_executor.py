@@ -225,6 +225,17 @@ class ToolExecutor:
         )
         if not result.get("success", True):
             return json.dumps(result)
+        job_id = result.get("job_id")
+        if job_id:
+            try:
+                from app.pipeline.tasks import send_booking_confirmation_sms
+
+                send_booking_confirmation_sms.delay(str(job_id))
+            except Exception:
+                logger.exception(
+                    "Failed to enqueue booking confirmation SMS for job %s",
+                    job_id,
+                )
         return json.dumps(result)
 
     async def execute_check_availability(self, **kwargs: Any) -> str:

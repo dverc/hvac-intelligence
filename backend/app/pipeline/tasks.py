@@ -24,6 +24,7 @@ from app.models.organization import Organization
 from app.models.technician import Technician
 from app.pipeline.celery_app import celery_app
 from app.core.metrics import saved_by_ai_counter
+from app.services.sms_service import build_booking_confirmation_sms, send_sms
 from app.pipeline.event_bus import (
     publish_batch_score_complete_sync,
     publish_intervention_complete_sync,
@@ -531,6 +532,76 @@ async def _sync_jobber_data_async() -> dict[str, Any]:
             raise
 
     return {"status": "ok", "summaries": summaries}
+
+
+@celery_app.task(name="app.pipeline.tasks.send_booking_confirmation_sms")
+def send_booking_confirmation_sms(job_id: str) -> dict[str, Any]:
+    """Send the customer an SMS after a dispatch job is booked."""
+    session = get_sync_session()
+    try:
+        job = session.get(DispatchJob, uuid.UUID(job_id))
+        if job is None:
+            logger.warning("send_booking_confirmation_sms: job %s not found", job_id)
+            return {"status": "error", "reason": "job_not_found"}
+
+        customer = session.get(Customer, job.customer_id)
+        if customer is None:
+            logger.warning(
+                "send_booking_confirmation_sms: customer missing for job %s", job_id
+            )
+            return {"status": "error", "reason": "customer_not_found"}
+
+        if not customer.phone_primary:
+            logger.warning(
+                "send_booking_confirmation_sms: no phone for customer on job %s",
+                job_id,
+            )
+            return {"status": "error", "reason": "missing_phone"}
+
+        technician_name = "our technician"
+        if job.technician_id is not None:
+            tech = session.get(Technician, job.technician_id)
+            if tech is not None:
+                technician_name = tech.full_name
+
+        address_parts = [
+            part
+            for part in (
+                customer.address_line1,
+                customer.city,
+                customer.state,
+                customer.zip,
+            )
+            if part
+        ]
+        address = ", ".join(address_parts) if address_parts else "your service address"
+
+        if job.scheduled_window_start and job.scheduled_window_end:
+            scheduled_window = (
+                f"{job.scheduled_window_start.strftime('%a %b %d, %I:%M %p')}–"
+                f"{job.scheduled_window_end.strftime('%I:%M %p')}"
+            )
+        else:
+            scheduled_window = "your scheduled window"
+
+        message = build_booking_confirmation_sms(
+            customer_name=customer.full_name,
+            technician_name=technician_name,
+            scheduled_window=scheduled_window,
+            address=address,
+            issue_type=job.issue_type or "service",
+        )
+        sent = send_sms(customer.phone_primary, message)
+        if sent:
+            logger.info("Booking confirmation SMS sent for job %s", job_id)
+            return {"status": "ok", "job_id": job_id}
+        logger.warning("Booking confirmation SMS not sent for job %s", job_id)
+        return {"status": "skipped", "job_id": job_id}
+    except Exception as exc:
+        logger.exception("send_booking_confirmation_sms failed for job %s", job_id)
+        return {"status": "error", "reason": str(exc)}
+    finally:
+        session.close()
 
 
 @celery_app.task(name="app.pipeline.tasks.sync_google_drive_folders")
