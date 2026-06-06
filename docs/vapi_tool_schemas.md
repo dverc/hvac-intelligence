@@ -307,6 +307,32 @@ Check real technician availability before confirming a booking. Call this before
 
 ---
 
+## check_service_area
+
+Validate whether a customer address is within the service area before booking.
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "check_service_area",
+    "description": "Validate whether a customer address is within the service area before booking.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "Full service address including street, city, state, and ZIP."
+        }
+      },
+      "required": ["address"]
+    }
+  }
+}
+```
+
+---
+
 ## transfer_call
 
 Transfer the live call to a human agent or dispatcher.

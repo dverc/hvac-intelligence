@@ -35,6 +35,7 @@ from app.services.churn_service import ChurnService
 from app.services.customer_service import CustomerService
 from app.services.dispatch_service import DispatchService
 from app.services.equipment_service import EquipmentService
+from app.services.service_area_service import is_address_serviceable
 from app.services.service_catalog_service import (
     ServiceCatalogService,
     format_duration,
@@ -59,6 +60,7 @@ TOOL_REGISTRY: dict[str, str] = {
     "lookup_service_info": "execute_lookup_service_info",
     "check_availability": "execute_check_availability",
     "transfer_call": "execute_transfer_call",
+    "check_service_area": "execute_check_service_area",
 }
 
 
@@ -552,6 +554,22 @@ class ToolExecutor:
                 "message": result["message"],
             }
         )
+
+    async def execute_check_service_area(self, **kwargs: Any) -> str:
+        try:
+            address = str(kwargs.get("address") or "").strip()
+            if not address:
+                return "Please provide the service address so I can check coverage."
+
+            org = await self.db.get(Organization, self.org_id)
+            settings = org.settings or {} if org is not None else {}
+            _serviceable, message = is_address_serviceable(address, settings)
+            return message
+        except Exception:
+            logger.exception("check_service_area failed | org_id=%s", self.org_id)
+            return (
+                "I couldn't verify the service area right now — we can continue with booking."
+            )
 
     async def execute_transfer_call(self, **kwargs: Any) -> str | dict[str, Any]:
         try:

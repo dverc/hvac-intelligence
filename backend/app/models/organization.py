@@ -45,6 +45,8 @@ class Organization(Base):
     #   timezone: IANA name (e.g. "America/Los_Angeles")
     #   business_hours: per-day open/close or null when closed, e.g.
     #     {"monday": {"open": "08:00", "close": "17:00"}, ..., "saturday": null, "sunday": null}
+    #   service_area: ZIP list or radius-based coverage, e.g.
+    #     {"zip_codes": ["92612", "92614"], "radius_miles": 25, "center_zip": "92612"}
     settings: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     transfer_phone_number: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(
