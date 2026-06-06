@@ -18,6 +18,7 @@ from app.core.rate_limit import limiter
 from app.core.database import get_session_factory
 from app.pipeline.event_bus import publish_call_active_event
 from app.schemas.organization import OrganizationSettings
+from app.services.hours_service import get_hours_context, is_within_business_hours
 from app.services.tenant_service import TenantService, normalize_phone
 from app.services.transcript_service import TranscriptService
 from app.services.vapi_payload import extract_phone_from_vapi_payload
@@ -260,10 +261,25 @@ async def handle_vapi_webhook(
                             intervention_triggered=True,
                         )
 
+            system_prompt = enrichment["system_prompt_injection"]
+            if call_start_org is not None:
+                org_settings_dict = call_start_org.settings or {}
+                if not is_within_business_hours(org_settings_dict):
+                    hours_context = get_hours_context(org_settings_dict)
+                    system_prompt = (
+                        "AFTER-HOURS NOTICE: This call is being received outside normal "
+                        f"business hours. {hours_context} Acknowledge the time warmly. "
+                        "Offer the caller two options: (1) emergency dispatch — explain "
+                        "there is a premium after-hours rate and ask if they want to "
+                        "proceed, or (2) schedule for the next available business day "
+                        "slot. Do not promise standard pricing for after-hours calls.\n\n"
+                        f"{system_prompt}"
+                    )
+
             assistant_overrides: dict[str, Any] = {
                 "variableValues": variable_values,
                 "model": {
-                    "systemPrompt": enrichment["system_prompt_injection"],
+                    "systemPrompt": system_prompt,
                 },
             }
             if enrichment.get("first_message"):

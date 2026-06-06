@@ -41,6 +41,10 @@ class Organization(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
     )
+    # settings JSONB may include:
+    #   timezone: IANA name (e.g. "America/Los_Angeles")
+    #   business_hours: per-day open/close or null when closed, e.g.
+    #     {"monday": {"open": "08:00", "close": "17:00"}, ..., "saturday": null, "sunday": null}
     settings: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     transfer_phone_number: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(
