@@ -209,7 +209,26 @@ export default function AnalyticsPage() {
               <ResponsiveContainer width="100%" height={320}>
                 <BarChart data={hourChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={2} />
+                  <XAxis
+                    dataKey="hour"
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={(hour) => {
+                      const value = Number(hour);
+                      if (value % 3 !== 0) {
+                        return "";
+                      }
+                      if (value === 0) {
+                        return "12am";
+                      }
+                      if (value === 12) {
+                        return "12pm";
+                      }
+                      if (value < 12) {
+                        return `${value}am`;
+                      }
+                      return `${value - 12}pm`;
+                    }}
+                  />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                   <Tooltip />
                   <Bar dataKey="count" fill="#2563eb" radius={[4, 4, 0, 0]} name="Calls" />
