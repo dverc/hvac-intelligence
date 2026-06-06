@@ -79,10 +79,11 @@ async def test_schedule_dispatch_creates_job(tool_executor, seeded_customer, db_
             customer_id=customer_id,
             issue_type="AC_FAILURE",
             priority="P1",
-            preferred_window="tomorrow_AM",
+            preferred_window="monday morning",
             issue_description="Unit not cooling",
         )
     )
+    assert result.get("success") is True, result
     assert result["job_number"]
 
     row = await db_session.execute(
@@ -305,10 +306,11 @@ async def test_update_dispatch_address_correction_appended_to_notes(
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_FAILURE",
             priority="P2",
-            preferred_window="tomorrow afternoon",
+            preferred_window="monday afternoon",
             issue_description="Unit not cooling",
         )
     )
+    assert dispatch_result.get("success") is True, dispatch_result
     job_id = dispatch_result["job_id"]
 
     result = json.loads(
@@ -332,10 +334,11 @@ async def test_update_dispatch_cancel_sets_status_cancelled(
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_FAILURE",
             priority="P3",
-            preferred_window="tomorrow",
+            preferred_window="tuesday morning",
             issue_description="No longer needed",
         )
     )
+    assert dispatch_result.get("success") is True, dispatch_result
     job_id = dispatch_result["job_id"]
 
     result = json.loads(
@@ -389,3 +392,42 @@ async def test_lookup_service_info_no_results_helpful_message(tool_executor):
 async def test_lookup_service_info_validation_error_without_args(tool_executor):
     result = json.loads(await tool_executor.execute_lookup_service_info())
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_transfer_call_returns_destination_when_phone_set(
+    tool_executor, db_session
+):
+    from app.core.constants import SEED_ORG_ID
+    from app.models.organization import Organization
+
+    org = await db_session.get(Organization, SEED_ORG_ID)
+    org.transfer_phone_number = "+19491234567"
+    await db_session.flush()
+
+    result = await tool_executor.execute_transfer_call(
+        reason="Customer requested human agent"
+    )
+
+    assert isinstance(result, dict)
+    assert "destination" in result
+    assert result["destination"]["type"] == "number"
+    assert result["destination"]["number"] == "+19491234567"
+
+
+@pytest.mark.asyncio
+async def test_transfer_call_returns_fallback_when_no_phone_set(
+    tool_executor, db_session
+):
+    from app.core.constants import SEED_ORG_ID
+    from app.models.organization import Organization
+
+    org = await db_session.get(Organization, SEED_ORG_ID)
+    org.transfer_phone_number = None
+    await db_session.flush()
+
+    result = await tool_executor.execute_transfer_call()
+
+    assert isinstance(result, str)
+    assert not isinstance(result, dict)
+    assert "callback" in result.lower()

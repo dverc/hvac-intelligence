@@ -307,6 +307,31 @@ Check real technician availability before confirming a booking. Call this before
 
 ---
 
+## transfer_call
+
+Transfer the live call to a human agent or dispatcher.
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "transfer_call",
+    "description": "Transfer the live call to a human agent or dispatcher.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "The reason for the transfer."
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Identity confirmation (system prompt — no tool)
 
 On **call-start**, the backend injects identity confirmation instructions when a phone match is found. No dashboard change required — ensure the assistant system prompt allows following injected context from `assistantOverrides.model.systemPrompt`.

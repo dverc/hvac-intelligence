@@ -46,7 +46,7 @@ async def test_create_job_attempts_jobber_write(
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_NO_COOLING",
             priority="P2",
-            preferred_window="tomorrow morning",
+            preferred_window="monday morning",
             issue_description="Jobber integration test",
             org_id=SEED_ORG_ID,
         )
@@ -78,7 +78,7 @@ async def test_create_job_succeeds_when_jobber_fails(
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_NO_COOLING",
             priority="P3",
-            preferred_window="tomorrow afternoon",
+            preferred_window="monday afternoon",
             issue_description="Non-blocking Jobber failure",
             org_id=SEED_ORG_ID,
         )

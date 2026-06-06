@@ -42,6 +42,7 @@ class Organization(Base):
         Boolean, nullable=False, server_default="true"
     )
     settings: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    transfer_phone_number: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -31,7 +31,7 @@ def tool_executor(db_session, mock_rag_retriever):
 @pytest.mark.asyncio
 async def test_schedule_dispatch_rejects_double_booking(tool_executor, seeded_customer):
     customer_id = seeded_customer["customer_id"]
-    window = "tomorrow morning"
+    window = "monday morning"
 
     first = json.loads(
         await tool_executor.execute_schedule_dispatch(
@@ -64,7 +64,7 @@ async def test_schedule_dispatch_succeeds_when_free(tool_executor, seeded_custom
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_FAILURE",
             priority="P3",
-            preferred_window="tomorrow afternoon",
+            preferred_window="monday afternoon",
             issue_description="Afternoon slot",
         )
     )
@@ -83,7 +83,7 @@ async def test_sequential_non_overlapping_bookings_succeed(
             customer_id=customer_id,
             issue_type="AC_FAILURE",
             priority="P3",
-            preferred_window="tomorrow morning",
+            preferred_window="monday morning",
             issue_description="Morning slot",
         )
     )
@@ -92,7 +92,7 @@ async def test_sequential_non_overlapping_bookings_succeed(
             customer_id=customer_id,
             issue_type="FURNACE_NO_HEAT",
             priority="P3",
-            preferred_window="tomorrow afternoon",
+            preferred_window="monday afternoon",
             issue_description="Afternoon slot",
         )
     )

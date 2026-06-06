@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import observe_tool_execution
+from app.models.organization import Organization
 from app.rag.constants import get_base_namespace, get_namespace
 from app.rag.retriever import RAGRetriever
 from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
@@ -57,6 +58,7 @@ TOOL_REGISTRY: dict[str, str] = {
     "update_dispatch": "execute_update_dispatch",
     "lookup_service_info": "execute_lookup_service_info",
     "check_availability": "execute_check_availability",
+    "transfer_call": "execute_transfer_call",
 }
 
 
@@ -550,6 +552,41 @@ class ToolExecutor:
                 "message": result["message"],
             }
         )
+
+    async def execute_transfer_call(self, **kwargs: Any) -> str | dict[str, Any]:
+        try:
+            reason = kwargs.get("reason", "Customer requested human agent")
+            org = await self.db.get(Organization, self.org_id)
+            transfer_phone_number = org.transfer_phone_number if org is not None else None
+            if not transfer_phone_number or not str(transfer_phone_number).strip():
+                logger.info(
+                    "transfer_call unavailable | org_id=%s reason=%s",
+                    self.org_id,
+                    reason,
+                )
+                return (
+                    "Transfer is not available for this account. "
+                    "I'll create a callback request for you instead."
+                )
+
+            logger.info(
+                "transfer_call initiated | org_id=%s reason=%s",
+                self.org_id,
+                reason,
+            )
+            return {
+                "destination": {
+                    "type": "number",
+                    "number": transfer_phone_number,
+                },
+                "message": "Please hold while I transfer you to our team.",
+            }
+        except Exception:
+            logger.exception("transfer_call failed | org_id=%s", self.org_id)
+            return (
+                "I'm unable to transfer the call right now. "
+                "I'll create a callback request for you instead."
+            )
 
 
 def _serialize_equipment_row(row: Any) -> dict[str, Any]:
