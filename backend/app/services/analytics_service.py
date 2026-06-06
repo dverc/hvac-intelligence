@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, time, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -15,6 +15,10 @@ from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
 from app.models.support_ticket import SupportTicket
 from app.schemas.analytics import (
+    CallAnalyticsResponse,
+    CallAnalyticsSummary,
+    CallsByDayItem,
+    CallsByHourItem,
     ChurnDistributionResponse,
     ChurnTimelinePoint,
     ChurnTimelineResponse,
@@ -28,8 +32,10 @@ from app.schemas.analytics import (
     RetentionEventItem,
     RetentionEventsResponse,
     SavedByAIResponse,
+    SentimentBreakdown,
     TimelineEvent,
     TopInterventionType,
+    TopIssueTypeItem,
     WeekOverWeekDelta,
 )
 from app.core.metrics import high_risk_accounts_gauge
@@ -903,6 +909,123 @@ class AnalyticsService:
             }
 
         return list(snapshots.values())
+
+    async def get_call_analytics(
+        self, org_id: uuid.UUID, days: int
+    ) -> CallAnalyticsResponse:
+        end = datetime.now(timezone.utc)
+        range_start_date = (end - timedelta(days=days - 1)).date()
+        range_start = datetime.combine(range_start_date, time.min, tzinfo=timezone.utc)
+
+        transcripts = (
+            await self.db.execute(
+                scoped(
+                    select(CallTranscript).where(
+                        CallTranscript.call_start_utc >= range_start,
+                        CallTranscript.call_start_utc <= end,
+                    ),
+                    CallTranscript,
+                    org_id,
+                )
+            )
+        ).scalars().all()
+
+        total_calls = len(transcripts)
+        calls_booked = sum(1 for t in transcripts if t.dispatch_job_id is not None)
+        calls_escalated = sum(
+            1 for t in transcripts if _transcript_is_escalated(t)
+        )
+
+        durations = [
+            t.duration_seconds for t in transcripts if t.duration_seconds is not None
+        ]
+        avg_duration = round(sum(durations) / len(durations), 1) if durations else 0.0
+
+        costs = [
+            float(t.call_cost_usd) for t in transcripts if t.call_cost_usd is not None
+        ]
+        total_cost = round(sum(costs), 2) if costs else 0.0
+        booking_rate = (
+            round((calls_booked / total_calls) * 100, 1) if total_calls else 0.0
+        )
+
+        day_counts: Counter = Counter(
+            t.call_start_utc.astimezone(timezone.utc).date() for t in transcripts
+        )
+        calls_by_day = [
+            CallsByDayItem(
+                date=(range_start_date + timedelta(days=offset)).isoformat(),
+                count=day_counts.get(range_start_date + timedelta(days=offset), 0),
+            )
+            for offset in range(days)
+        ]
+
+        hour_counts: Counter = Counter(
+            t.call_start_utc.astimezone(timezone.utc).hour for t in transcripts
+        )
+        calls_by_hour = [
+            CallsByHourItem(hour=hour, count=hour_counts.get(hour, 0))
+            for hour in range(24)
+        ]
+
+        issue_rows = (
+            await self.db.execute(
+                scoped(
+                    select(DispatchJob.issue_type, func.count())
+                    .where(
+                        DispatchJob.created_at >= range_start,
+                        DispatchJob.created_at <= end,
+                    )
+                    .group_by(DispatchJob.issue_type)
+                    .order_by(func.count().desc())
+                    .limit(5),
+                    DispatchJob,
+                    org_id,
+                )
+            )
+        ).all()
+        top_issue_types = [
+            TopIssueTypeItem(issue_type=row[0], count=int(row[1])) for row in issue_rows
+        ]
+
+        sentiment = SentimentBreakdown(positive=0, neutral=0, negative=0)
+        for transcript in transcripts:
+            if transcript.sentiment_overall is None:
+                sentiment.neutral += 1
+                continue
+            score = float(transcript.sentiment_overall)
+            if score > 0.1:
+                sentiment.positive += 1
+            elif score < -0.1:
+                sentiment.negative += 1
+            else:
+                sentiment.neutral += 1
+
+        return CallAnalyticsResponse(
+            summary=CallAnalyticsSummary(
+                total_calls=total_calls,
+                calls_booked=calls_booked,
+                calls_escalated=calls_escalated,
+                booking_rate=booking_rate,
+                avg_duration_seconds=avg_duration,
+                total_cost_usd=total_cost,
+            ),
+            calls_by_day=calls_by_day,
+            calls_by_hour=calls_by_hour,
+            top_issue_types=top_issue_types,
+            sentiment_breakdown=sentiment,
+        )
+
+
+def _transcript_is_escalated(transcript: CallTranscript) -> bool:
+    if transcript.escalation_detected:
+        return True
+    for field in (transcript.call_summary, transcript.transcript_raw):
+        if field and "escalat" in field.lower():
+            return True
+    if transcript.call_outcome and "escalat" in transcript.call_outcome.lower():
+        return True
+    return False
 
 
 def _score_to_tier(score: float) -> str:

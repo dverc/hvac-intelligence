@@ -280,6 +280,32 @@ export function getFeatureImportance(modelVersion = "latest") {
   });
 }
 
+export interface CallAnalyticsResponse {
+  summary: {
+    total_calls: number;
+    calls_booked: number;
+    calls_escalated: number;
+    booking_rate: number;
+    avg_duration_seconds: number;
+    total_cost_usd: number;
+  };
+  calls_by_day: { date: string; count: number }[];
+  calls_by_hour: { hour: number; count: number }[];
+  top_issue_types: { issue_type: string; count: number }[];
+  sentiment_breakdown: {
+    positive: number;
+    neutral: number;
+    negative: number;
+  };
+}
+
+export function getCallAnalytics(orgId: string, days = 30) {
+  return apiGet<CallAnalyticsResponse>("/api/v1/analytics/calls", {
+    org_id: orgId,
+    days,
+  });
+}
+
 // ── Knowledge base ────────────────────────────────────────────────────────────
 
 export interface KnowledgeDocument {

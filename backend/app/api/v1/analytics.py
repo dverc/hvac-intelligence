@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from app.api.deps import get_analytics_service
 from app.core.tenant import get_dashboard_org_id
 from app.schemas.analytics import (
+    CallAnalyticsResponse,
     ChurnDistributionResponse,
     FeatureImportanceResponse,
     RetentionEventsResponse,
@@ -56,3 +57,12 @@ async def feature_importance(
     org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> FeatureImportanceResponse:
     return await analytics.get_feature_importance(org_id, model_version=model_version)
+
+
+@router.get("/calls", response_model=CallAnalyticsResponse)
+async def call_analytics(
+    org_id: str = Query(...),
+    days: int = Query(default=30, ge=1, le=90),
+    analytics: AnalyticsService = Depends(get_analytics_service),
+) -> CallAnalyticsResponse:
+    return await analytics.get_call_analytics(uuid.UUID(org_id), days)

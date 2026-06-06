@@ -145,3 +145,41 @@ class ChurnTimelineResponse(BaseModel):
     net_change: float
     interventions_count: int
     saved_by_ai: bool
+
+
+class CallAnalyticsSummary(BaseModel):
+    total_calls: int
+    calls_booked: int
+    calls_escalated: int
+    booking_rate: float
+    avg_duration_seconds: float
+    total_cost_usd: float
+
+
+class CallsByDayItem(BaseModel):
+    date: str
+    count: int
+
+
+class CallsByHourItem(BaseModel):
+    hour: int
+    count: int
+
+
+class TopIssueTypeItem(BaseModel):
+    issue_type: str
+    count: int
+
+
+class SentimentBreakdown(BaseModel):
+    positive: int
+    neutral: int
+    negative: int
+
+
+class CallAnalyticsResponse(BaseModel):
+    summary: CallAnalyticsSummary
+    calls_by_day: list[CallsByDayItem]
+    calls_by_hour: list[CallsByHourItem]
+    top_issue_types: list[TopIssueTypeItem]
+    sentiment_breakdown: SentimentBreakdown
