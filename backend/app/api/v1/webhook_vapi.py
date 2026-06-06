@@ -12,12 +12,13 @@ from fastapi.responses import JSONResponse
 
 from app.api import deps
 from app.core.config import get_settings
+from app.core.constants import SEED_ORG_ID
 from app.core.metrics import vapi_webhook_total
 from app.core.rate_limit import limiter
 from app.core.database import get_session_factory
 from app.pipeline.event_bus import publish_call_active_event
 from app.schemas.organization import OrganizationSettings
-from app.services.tenant_service import TenantService
+from app.services.tenant_service import TenantService, normalize_phone
 from app.services.transcript_service import TranscriptService
 from app.services.vapi_payload import extract_phone_from_vapi_payload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,6 +73,31 @@ def _event_type(message: dict[str, Any]) -> str:
 
 def _extract_phone_from_call(message: dict[str, Any]) -> Optional[str]:
     return extract_phone_from_vapi_payload(message)
+
+
+def _normalize_phones_in_call_message(message: dict[str, Any]) -> None:
+    """Normalise caller and called business numbers in-place for tenant resolution."""
+    call = message.get("call")
+    if not isinstance(call, dict):
+        call = {}
+        message["call"] = call
+
+    for container in (call, message):
+        customer = container.get("customer")
+        if isinstance(customer, dict) and customer.get("number"):
+            customer["number"] = normalize_phone(str(customer["number"]))
+
+    for container in (call, message):
+        phone_number = container.get("phoneNumber") or container.get("phone_number")
+        if isinstance(phone_number, dict) and phone_number.get("number"):
+            phone_number["number"] = normalize_phone(str(phone_number["number"]))
+        elif isinstance(phone_number, str) and phone_number:
+            container["phoneNumber"] = {"number": normalize_phone(phone_number)}
+
+    for container in (call, message):
+        to = container.get("to")
+        if isinstance(to, str) and to:
+            container["to"] = normalize_phone(to)
 
 
 async def _process_call_end_background(call_data: dict[str, Any], org_id: str) -> None:
@@ -160,56 +186,100 @@ async def handle_vapi_webhook(
         results = await tool_executor.execute_batch(tool_call_list)
         return JSONResponse({"results": results})
 
-    if event_type in {"call-start", "call-started"}:
-        tool_executor = await deps.build_tool_executor(db)
-        tool_executor.set_tenant(
-            org_id,
-            org_settings,
-            org_slug=org.slug if org is not None else None,
-        )
-        phone = _extract_phone_from_call(message)
-        if not phone:
-            raise HTTPException(status_code=422, detail="Missing caller phone number")
-        if org is None:
-            raise HTTPException(status_code=500, detail="Tenant resolution failed")
+    if event_type in {"call-start", "call-started", "assistant-started"}:
+        try:
+            _normalize_phones_in_call_message(message)
 
-        enrichment = await tool_executor.customer_service.get_call_context(
-            phone, call_id, org
-        )
-        variable_values = enrichment["variable_values"]
-        logger.info(
-            "Call context for %s (call_id=%s): customer=%s, churn=%s",
-            phone,
-            call_id,
-            variable_values.get("customer_name"),
-            variable_values.get("churn_risk"),
-        )
+            try:
+                call_start_org_id = await tenant_service.resolve_org_for_call(
+                    str(call_id), message
+                )
+            except Exception:
+                logger.warning(
+                    "Tenant resolution raised for call-start | call_id=%s",
+                    call_id,
+                    exc_info=True,
+                )
+                call_start_org_id = None
 
-        customer = await tool_executor.customer_service.lookup_by_phone(phone, org_id)
-        if customer is not None:
-            score = await tool_executor.churn_service.get_latest_score(
-                str(customer.customer_id), org_id
+            if call_start_org_id is None:
+                logger.warning(
+                    "Tenant resolution returned None for call-start | call_id=%s; "
+                    "using fallback org",
+                    call_id,
+                )
+                call_start_org_id = SEED_ORG_ID
+
+            call_start_org = await tenant_service.get_tenant_by_id(call_start_org_id)
+            call_start_org_settings = (
+                OrganizationSettings.model_validate(call_start_org.settings or {})
+                if call_start_org is not None
+                else None
             )
-            if score.get("risk_tier") in ("HIGH", "CRITICAL"):
-                await publish_call_active_event(
-                    call_id=str(call_id),
-                    customer_id=str(customer.customer_id),
-                    customer_name=customer.full_name,
-                    churn_risk_tier=score["risk_tier"],
-                    churn_probability=float(score["churn_probability"]),
-                    intervention_triggered=True,
+
+            tool_executor = await deps.build_tool_executor(db)
+            tool_executor.set_tenant(
+                call_start_org_id,
+                call_start_org_settings,
+                org_slug=call_start_org.slug if call_start_org is not None else None,
+            )
+            phone = _extract_phone_from_call(message)
+            if not phone:
+                logger.warning(
+                    "Missing caller phone number for call-start | call_id=%s",
+                    call_id,
                 )
 
-        assistant_overrides: dict[str, Any] = {
-            "variableValues": variable_values,
-            "model": {
-                "systemPrompt": enrichment["system_prompt_injection"],
-            },
-        }
-        if enrichment.get("first_message"):
-            assistant_overrides["firstMessage"] = enrichment["first_message"]
+            enrichment = await tool_executor.customer_service.get_call_context(
+                phone or "", call_id, call_start_org
+            )
+            variable_values = enrichment["variable_values"]
+            logger.info(
+                "Call context for %s (call_id=%s): customer=%s, churn=%s",
+                phone,
+                call_id,
+                variable_values.get("customer_name"),
+                variable_values.get("churn_risk"),
+            )
 
-        return JSONResponse({"assistantOverrides": assistant_overrides})
+            if phone and call_start_org is not None:
+                customer = await tool_executor.customer_service.lookup_by_phone(
+                    phone, call_start_org_id
+                )
+                if customer is not None:
+                    score = await tool_executor.churn_service.get_latest_score(
+                        str(customer.customer_id), call_start_org_id
+                    )
+                    if score.get("risk_tier") in ("HIGH", "CRITICAL"):
+                        await publish_call_active_event(
+                            call_id=str(call_id),
+                            customer_id=str(customer.customer_id),
+                            customer_name=customer.full_name,
+                            churn_risk_tier=score["risk_tier"],
+                            churn_probability=float(score["churn_probability"]),
+                            intervention_triggered=True,
+                        )
+
+            assistant_overrides: dict[str, Any] = {
+                "variableValues": variable_values,
+                "model": {
+                    "systemPrompt": enrichment["system_prompt_injection"],
+                },
+            }
+            if enrichment.get("first_message"):
+                assistant_overrides["firstMessage"] = enrichment["first_message"]
+
+            return JSONResponse({"assistantOverrides": assistant_overrides})
+        except Exception:
+            logger.exception(
+                "call-start processing failed | call_id=%s", call_id
+            )
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "warning": "call-start processing failed, continuing",
+                }
+            )
 
     if event_type in {"call-end", "call-ended", "end-of-call-report"}:
         background = BackgroundTasks()
