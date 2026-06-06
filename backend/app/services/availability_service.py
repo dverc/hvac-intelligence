@@ -53,6 +53,7 @@ class AvailabilityService:
         self,
         org_id: uuid.UUID,
         preferred_technician_id: uuid.UUID | None = None,
+        required_skill: str | None = None,
     ) -> list[Technician]:
         stmt = scoped(
             select(Technician).where(Technician.employment_status == "ACTIVE"),
@@ -61,6 +62,8 @@ class AvailabilityService:
         )
         if preferred_technician_id:
             stmt = stmt.where(Technician.technician_id == preferred_technician_id)
+        if required_skill is not None:
+            stmt = stmt.where(Technician.skills.contains([required_skill]))
         return list((await self.db.execute(stmt.order_by(Technician.full_name))).scalars())
 
     async def _get_working_hours(
@@ -193,9 +196,12 @@ class AvailabilityService:
         date_range_end: date,
         duration_minutes: int = 60,
         preferred_technician_id: uuid.UUID | None = None,
+        required_skill: str | None = None,
     ) -> list[AvailableSlot]:
         tz_name = await self._get_org_timezone(org_id)
-        technicians = await self._get_active_technicians(org_id, preferred_technician_id)
+        technicians = await self._get_active_technicians(
+            org_id, preferred_technician_id, required_skill
+        )
         if not technicians:
             return []
 

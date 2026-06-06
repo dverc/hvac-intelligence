@@ -36,6 +36,7 @@ from app.services.customer_service import CustomerService
 from app.services.dispatch_service import DispatchService
 from app.services.equipment_service import EquipmentService
 from app.services.service_area_service import is_address_serviceable
+from app.services.skill_routing_service import get_required_skill
 from app.services.service_catalog_service import (
     ServiceCatalogService,
     format_duration,
@@ -243,12 +244,17 @@ class ToolExecutor:
             if parsed.preferred_technician_id
             else None
         )
+        issue_type = kwargs.get("issue_type")
+        required_skill = (
+            get_required_skill(str(issue_type)) if issue_type is not None else None
+        )
         slots = await self.availability_service.get_available_slots(
             org_id=self.org_id,
             date_range_start=date_start,
             date_range_end=date_end,
             duration_minutes=parsed.duration_minutes,
             preferred_technician_id=preferred_tech,
+            required_skill=required_skill,
         )
         if not slots:
             return json.dumps(

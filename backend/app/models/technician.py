@@ -66,6 +66,9 @@ class Technician(Base):
     # PostgreSQL requires immutable generated expressions; NOW() is not allowed.
     tenure_years: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     certifications: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text))
+    skills: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("'{}'")
+    )
     service_zones: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(20)))
     avg_customer_rating: Mapped[Optional[Decimal]] = mapped_column(Numeric(3, 2))
     jobs_completed_90d: Mapped[int] = mapped_column(Integer, server_default="0")
