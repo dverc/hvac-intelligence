@@ -14,11 +14,11 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.api.v1 import api_router, google_oauth_router, jobber_oauth_router, vapi_router
 from app.core.auth import request_has_valid_api_key, verify_api_key
 from app.core.config import get_settings
-from app.core.logging import configure_logging
+from app.core.logging_config import configure_logging
 from app.core.rate_limit import limiter
 
+configure_logging()
 settings = get_settings()
-configure_logging(settings.DEBUG)
 
 
 def _docs_are_public() -> bool:

@@ -32,13 +32,37 @@ from app.pipeline.event_bus import (
 
 logger = logging.getLogger(__name__)
 
+_STANDARD_TASK_RETRY = dict(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+)
 
-@celery_app.task(name="app.pipeline.tasks.process_call_features", bind=True, max_retries=3)
+_SMS_TASK_RETRY = dict(
+    bind=True,
+    max_retries=5,
+    default_retry_delay=30,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+)
+
+
+@celery_app.task(name="app.pipeline.tasks.process_call_features", **_STANDARD_TASK_RETRY)
 def process_call_features(self, feature_payload: dict[str, Any]) -> dict[str, Any]:
     """
     Deserialize Kafka payload, build rolling-window features, upsert feature_store,
     run churn ensemble when artifacts exist, persist churn_scores.
     """
+    logger.info(
+        "Task starting: process_call_features attempt=%s",
+        self.request.retries + 1,
+    )
     customer_id = feature_payload.get("customer_id")
     if not customer_id:
         logger.error("process_call_features missing customer_id")
@@ -294,9 +318,13 @@ def _emit_intervention_complete(
     )
 
 
-@celery_app.task(name="app.pipeline.tasks.batch_rescore_customers")
-def batch_rescore_customers() -> dict[str, Any]:
+@celery_app.task(name="app.pipeline.tasks.batch_rescore_customers", **_STANDARD_TASK_RETRY)
+def batch_rescore_customers(self) -> dict[str, Any]:
     """Batch re-score all active customers; emits BATCH_SCORE_COMPLETE on Redis."""
+    logger.info(
+        "Task starting: batch_rescore_customers attempt=%s",
+        self.request.retries + 1,
+    )
     session = get_sync_session()
     try:
         critical_before = _count_tier(session, "CRITICAL")
@@ -369,9 +397,13 @@ def _count_tier(session, tier: str) -> int:
     return count
 
 
-@celery_app.task(name="app.pipeline.tasks.sync_technician_schedules")
-def sync_technician_schedules() -> dict[str, Any]:
+@celery_app.task(name="app.pipeline.tasks.sync_technician_schedules", **_STANDARD_TASK_RETRY)
+def sync_technician_schedules(self) -> dict[str, Any]:
     """Advance stale SCHEDULED jobs whose window has passed (FSM sync foundation)."""
+    logger.info(
+        "Task starting: sync_technician_schedules attempt=%s",
+        self.request.retries + 1,
+    )
     session = get_sync_session()
     try:
         now = datetime.now(timezone.utc)
@@ -415,9 +447,13 @@ def sync_technician_schedules() -> dict[str, Any]:
         session.close()
 
 
-@celery_app.task(name="app.pipeline.tasks.sync_google_calendars")
-def sync_google_calendars() -> dict[str, Any]:
+@celery_app.task(name="app.pipeline.tasks.sync_google_calendars", **_STANDARD_TASK_RETRY)
+def sync_google_calendars(self) -> dict[str, Any]:
     """Sync external Google Calendar events into schedule overrides (Phase 8A)."""
+    logger.info(
+        "Task starting: sync_google_calendars attempt=%s",
+        self.request.retries + 1,
+    )
     return asyncio.run(_sync_google_calendars_async())
 
 
@@ -486,9 +522,13 @@ async def _sync_google_calendars_async() -> dict[str, Any]:
     }
 
 
-@celery_app.task(name="app.pipeline.tasks.sync_jobber_data")
-def sync_jobber_data() -> dict[str, Any]:
+@celery_app.task(name="app.pipeline.tasks.sync_jobber_data", **_STANDARD_TASK_RETRY)
+def sync_jobber_data(self) -> dict[str, Any]:
     """Sync Jobber clients, users, and jobs into local tables (Phase 8B)."""
+    logger.info(
+        "Task starting: sync_jobber_data attempt=%s",
+        self.request.retries + 1,
+    )
     return asyncio.run(_sync_jobber_data_async())
 
 
@@ -534,9 +574,13 @@ async def _sync_jobber_data_async() -> dict[str, Any]:
     return {"status": "ok", "summaries": summaries}
 
 
-@celery_app.task(name="app.pipeline.tasks.send_booking_confirmation_sms")
-def send_booking_confirmation_sms(job_id: str) -> dict[str, Any]:
+@celery_app.task(name="app.pipeline.tasks.send_booking_confirmation_sms", **_SMS_TASK_RETRY)
+def send_booking_confirmation_sms(self, job_id: str) -> dict[str, Any]:
     """Send the customer an SMS after a dispatch job is booked."""
+    logger.info(
+        "Task starting: send_booking_confirmation_sms attempt=%s",
+        self.request.retries + 1,
+    )
     session = get_sync_session()
     try:
         job = session.get(DispatchJob, uuid.UUID(job_id))
@@ -604,9 +648,13 @@ def send_booking_confirmation_sms(job_id: str) -> dict[str, Any]:
         session.close()
 
 
-@celery_app.task(name="app.pipeline.tasks.sync_google_drive_folders")
-def sync_google_drive_folders() -> dict[str, Any]:
+@celery_app.task(name="app.pipeline.tasks.sync_google_drive_folders", **_STANDARD_TASK_RETRY)
+def sync_google_drive_folders(self) -> dict[str, Any]:
     """Sync Google Drive knowledge folders for connected orgs (Phase 9)."""
+    logger.info(
+        "Task starting: sync_google_drive_folders attempt=%s",
+        self.request.retries + 1,
+    )
     return asyncio.run(_sync_google_drive_folders_async())
 
 

@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging_config import get_call_id
 from app.core.cache import (
     CUSTOMER_CACHE_TTL,
     cache_delete,
@@ -167,8 +168,9 @@ class ToolExecutor:
     async def _execute_single(self, tool_call: dict[str, Any]) -> dict[str, str]:
         tool_call_id, tool_name, args = _parse_vapi_tool_call(tool_call)
         logger.info(
-            "Executing Vapi tool call id=%s name=%s args=%s",
+            "Executing Vapi tool call id=%s call_id=%s name=%s args=%s",
             tool_call_id,
+            get_call_id(),
             tool_name,
             _redact_args(args),
         )
