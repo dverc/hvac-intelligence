@@ -208,35 +208,90 @@ class ToolExecutor:
             }
 
     async def execute_schedule_dispatch(self, **kwargs: Any) -> str:
+        from app.core.config import get_settings
+        from app.core.redis_lock import LockNotAcquiredError, RedisLock, build_slot_lock_key
+        from app.models.customer import Customer
+        from app.services.window_parser import parse_preferred_window
+        from redis.asyncio import Redis
+        from sqlalchemy.orm import selectinload
+
         parsed = ScheduleDispatchArgs.model_validate(kwargs)
         churn_ctx = (
             parsed.churn_risk_context.model_dump() if parsed.churn_risk_context else None
         )
-        result = await self.dispatch_service.create_job(
-            customer_id=parsed.customer_id,
-            issue_type=parsed.issue_type,
-            priority=parsed.priority,
-            preferred_window=parsed.preferred_window,
-            issue_description=parsed.issue_description,
-            org_id=self.org_id,
-            equipment_id=parsed.equipment_id,
-            access_instructions=parsed.access_instructions,
-            churn_context=churn_ctx,
-        )
-        if not result.get("success", True):
-            return json.dumps(result)
-        job_id = result.get("job_id")
-        if job_id:
-            try:
-                from app.pipeline.tasks import send_booking_confirmation_sms
+        create_kwargs = {
+            "customer_id": parsed.customer_id,
+            "issue_type": parsed.issue_type,
+            "priority": parsed.priority,
+            "preferred_window": parsed.preferred_window,
+            "issue_description": parsed.issue_description,
+            "org_id": self.org_id,
+            "equipment_id": parsed.equipment_id,
+            "access_instructions": parsed.access_instructions,
+            "churn_context": churn_ctx,
+        }
 
-                send_booking_confirmation_sms.delay(str(job_id))
-            except Exception:
-                logger.exception(
-                    "Failed to enqueue booking confirmation SMS for job %s",
-                    job_id,
+        redis_client = Redis.from_url(get_settings().REDIS_URL, decode_responses=True)
+        try:
+            customer = await self.dispatch_service.db.get(
+                Customer,
+                uuid.UUID(parsed.customer_id),
+                options=[selectinload(Customer.preferred_tech)],
+            )
+
+            if customer is not None and customer.org_id == self.org_id:
+                technician = await self.dispatch_service._select_technician(
+                    customer, self.org_id
                 )
-        return json.dumps(result)
+                tz_name = await self.dispatch_service._get_org_timezone(self.org_id)
+                parsed_window = parse_preferred_window(parsed.preferred_window, tz_name)
+                lock_key = build_slot_lock_key(
+                    self.org_id,
+                    technician.technician_id,
+                    parsed_window.slot_date,
+                    parsed.preferred_window,
+                )
+                try:
+                    async with RedisLock(redis_client, lock_key):
+                        result = await self.dispatch_service.create_job(**create_kwargs)
+                except LockNotAcquiredError:
+                    availability = json.loads(
+                        await self.execute_check_availability(
+                            preferred_date=parsed.preferred_window,
+                            issue_type=parsed.issue_type,
+                        )
+                    )
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "error": "slot_taken",
+                            "message": (
+                                "That time slot was just taken by another booking. "
+                                "Let me check what else is available."
+                            ),
+                            "available_slots": availability.get("available_slots", []),
+                            "availability_message": availability.get("message"),
+                        }
+                    )
+            else:
+                result = await self.dispatch_service.create_job(**create_kwargs)
+
+            if not result.get("success", True):
+                return json.dumps(result)
+            job_id = result.get("job_id")
+            if job_id:
+                try:
+                    from app.pipeline.tasks import send_booking_confirmation_sms
+
+                    send_booking_confirmation_sms.delay(str(job_id))
+                except Exception:
+                    logger.exception(
+                        "Failed to enqueue booking confirmation SMS for job %s",
+                        job_id,
+                    )
+            return json.dumps(result)
+        finally:
+            await redis_client.aclose()
 
     async def execute_check_availability(self, **kwargs: Any) -> str:
         parsed = CheckAvailabilityArgs.model_validate(kwargs)
