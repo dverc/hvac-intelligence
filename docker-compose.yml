@@ -43,6 +43,16 @@ services:
     depends_on: [redis, kafka, postgres]
     volumes: ["ml_artifacts:/app/ml/artifacts"]
 
+  celery-beat:
+    build: ./backend
+    command: celery -A app.pipeline.celery_app beat --loglevel=info
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on: [redis, postgres]
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     ports: ["3000:3000"]
