@@ -4,6 +4,7 @@ pydantic==2.7.1
 pydantic-settings==2.3.0
 sqlalchemy==2.0.30
 greenlet>=3.0.0
+gunicorn
 aiofiles
 asyncpg==0.29.0
 alembic==1.13.1
