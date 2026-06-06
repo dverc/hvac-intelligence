@@ -12,7 +12,7 @@ Full technical specification: [`HVAC_Intelligence_Project_Aero_TechSpec.md`](./H
 
 ## What this is
 
-Project Aero is a production-shaped HVAC operations platform that couples a low-latency inbound voice agent with a predictive churn engine at the data layer. Inbound calls hit Vapi (Deepgram ASR + Claude tool-calling); the FastAPI backend handles webhooks, dispatches six deterministic tools (dispatch, churn lookup, RAG, tickets, equipment, customer profile), and streams every completed call into a feature pipeline. Transcripts, sentiment trajectories, and speech markers become rolling-window feature vectors in PostgreSQL; a gradient-boosted ensemble (XGBoost + LightGBM) scores 90-day churn probability on a configurable cadence.
+Project Aero is a production-shaped HVAC operations platform that couples a low-latency inbound voice agent with a predictive churn engine at the data layer. Inbound calls hit Vapi (Deepgram ASR + Claude tool-calling); the FastAPI backend handles webhooks, dispatches twelve deterministic tools (dispatch, churn lookup, RAG, tickets, equipment, customer profile), and streams every completed call into a feature pipeline. Transcripts, sentiment trajectories, and speech markers become rolling-window feature vectors in PostgreSQL; a gradient-boosted ensemble (XGBoost + LightGBM) scores 90-day churn probability on a configurable cadence.
 
 The voice path never blocks on ML inference. Call-end events publish to Kafka (`call.features`); Celery workers extract features, upsert `feature_store`, and write `churn_scores` asynchronously. A Next.js dashboard consumes REST analytics and an SSE churn-event stream so operators see risk movement, cohorts, and retention outcomes in near real time.
 
