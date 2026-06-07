@@ -5,6 +5,7 @@ export interface CustomerListItem {
   full_name: string;
   phone_primary: string;
   account_status: string;
+  customer_tier?: "standard" | "preferred" | "vip";
   risk_tier?: RiskTier;
 }
 
@@ -31,6 +32,7 @@ export interface CustomerProfile {
   phone_primary: string;
   email: string | null;
   account_status: string;
+  customer_tier?: "standard" | "preferred" | "vip";
   customer_since: string;
   contract_type: string | null;
   contract_value_usd: number | null;
@@ -89,6 +91,7 @@ export interface CustomerUpdatePayload {
   payment_method?: string;
   preferred_tech_id?: string;
   notes?: string;
+  customer_tier?: "standard" | "preferred" | "vip";
   address?: {
     line1?: string;
     line2?: string;

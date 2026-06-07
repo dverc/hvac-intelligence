@@ -44,15 +44,28 @@ export default async function CustomersPage({ searchParams }: Props) {
           <tbody className="divide-y divide-gray-100">
             {customers.items.map((customer) => {
               const tier = (customer.risk_tier ?? "LOW") as RiskTier;
+              const customerTier = customer.customer_tier ?? "standard";
               return (
                 <tr key={customer.customer_id} className="hover:bg-gray-50">
                   <td className="px-4 py-3">
-                    <Link
-                      href={`/dashboard/customers/${customer.customer_id}`}
-                      className="font-medium text-indigo-600 hover:underline"
-                    >
-                      {customer.full_name}
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/dashboard/customers/${customer.customer_id}`}
+                        className="font-medium text-indigo-600 hover:underline"
+                      >
+                        {customer.full_name}
+                      </Link>
+                      {customerTier === "vip" && (
+                        <span className="inline-flex items-center rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-semibold text-white">
+                          VIP
+                        </span>
+                      )}
+                      {customerTier === "preferred" && (
+                        <span className="inline-flex items-center rounded-full bg-blue-600 px-2.5 py-0.5 text-xs font-semibold text-white">
+                          Preferred
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{customer.phone_primary}</td>
                   <td className="px-4 py-3 text-gray-600">{customer.account_status}</td>

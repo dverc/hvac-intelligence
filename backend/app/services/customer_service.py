@@ -273,6 +273,7 @@ class CustomerService:
             "phone_primary": customer.phone_primary,
             "email": customer.email,
             "account_status": customer.account_status,
+            "customer_tier": customer.customer_tier,
             "customer_since": customer.customer_since.isoformat(),
             "contract_type": customer.contract_type,
             "contract_value_usd": float(customer.contract_value_usd)

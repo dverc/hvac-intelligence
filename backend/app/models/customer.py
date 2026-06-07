@@ -44,6 +44,10 @@ class Customer(Base):
             "contract_type IN ('ANNUAL_MAINTENANCE','RESIDENTIAL_OTC','COMMERCIAL_SLA')",
             name="ck_customers_contract_type",
         ),
+        CheckConstraint(
+            "customer_tier IN ('standard','preferred','vip')",
+            name="ck_customers_customer_tier",
+        ),
         # Tenant-scoped uniqueness: two orgs may legitimately share a phone/external_id.
         UniqueConstraint("org_id", "external_id", name="uq_customers_org_external_id"),
         Index("idx_customers_phone", "phone_primary"),
@@ -84,6 +88,9 @@ class Customer(Base):
         UUID(as_uuid=True), ForeignKey("technicians.technician_id")
     )
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    customer_tier: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="standard"
+    )
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

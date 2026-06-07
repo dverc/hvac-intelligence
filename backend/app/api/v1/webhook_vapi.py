@@ -29,6 +29,23 @@ router = APIRouter(prefix="/webhook/vapi", tags=["vapi"])
 logger = logging.getLogger(__name__)
 
 
+def _customer_tier_system_prompt_prefix(customer_tier: str) -> str:
+    """VIP/preferred tier instructions prepended to call-start system prompt."""
+    tier = (customer_tier or "standard").lower()
+    if tier == "vip":
+        return (
+            "VIP CUSTOMER: This is a VIP customer. Greet them warmly and personally. "
+            "Mention that we truly value their loyalty. Offer priority scheduling — "
+            "give them the earliest available slot first. Waive the diagnostic fee if mentioned."
+        )
+    if tier == "preferred":
+        return (
+            "PREFERRED CUSTOMER: This is a preferred customer. Treat them with extra warmth. "
+            "Mention our annual maintenance plan if relevant."
+        )
+    return ""
+
+
 def _normalize_signature(signature_header: str) -> bytes | None:
     """Parse hex digest from Vapi signature header variants."""
     if not signature_header:
@@ -274,6 +291,7 @@ async def handle_vapi_webhook(
                     variable_values.get("churn_risk"),
                 )
 
+                customer = None
                 if phone and call_start_org is not None:
                     customer = await tool_executor.customer_service.lookup_by_phone(
                         phone, call_start_org_id
@@ -293,6 +311,10 @@ async def handle_vapi_webhook(
                             )
 
                 system_prompt = enrichment["system_prompt_injection"]
+                if customer is not None:
+                    tier_prefix = _customer_tier_system_prompt_prefix(customer.customer_tier)
+                    if tier_prefix:
+                        system_prompt = f"{tier_prefix}\n\n{system_prompt}"
                 if call_start_org is not None and call_start_org.agent_name:
                     system_prompt = (
                         f"Your name is {call_start_org.agent_name}. {system_prompt}"

@@ -7,6 +7,10 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+CustomerStatus = Literal["ACTIVE", "SUSPENDED", "CHURNED", "PROSPECT"]
+CustomerTier = Literal["standard", "preferred", "vip"]
+
+
 class CustomerAddressPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -38,4 +42,23 @@ class CustomerUpdate(BaseModel):
     payment_method: Optional[str] = None
     preferred_tech_id: Optional[uuid.UUID] = None
     notes: Optional[str] = None
+    customer_tier: Optional[CustomerTier] = None
     address: Optional[CustomerAddressPatch] = None
+
+
+class CustomerOut(BaseModel):
+    """Customer profile returned by GET/PATCH /customers/{id}."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    customer_id: uuid.UUID
+    external_id: Optional[str] = None
+    full_name: str
+    phone_primary: str
+    email: Optional[str] = None
+    account_status: str
+    customer_tier: CustomerTier = "standard"
+    customer_since: date
+    contract_type: Optional[str] = None
+    contract_value_usd: Optional[float] = None
+    notes: Optional[str] = None

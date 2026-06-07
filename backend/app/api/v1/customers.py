@@ -74,6 +74,7 @@ async def list_customers(
                 "full_name": c.full_name,
                 "phone_primary": c.phone_primary,
                 "account_status": c.account_status,
+                "customer_tier": c.customer_tier,
                 "risk_tier": latest_tier_by_customer.get(
                     c.customer_id,
                     str((c.metadata_ or {}).get("churn_tier", "LOW")).upper(),
