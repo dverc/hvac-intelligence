@@ -65,6 +65,8 @@ async def list_organizations(
             industry=org.industry,
             business_phone=org.business_phone,
             vapi_assistant_id=org.vapi_assistant_id,
+            vapi_phone_number=org.vapi_phone_number,
+            agent_name=org.agent_name,
             vapi_phone_number_id=org.vapi_phone_number_id,
             plan_tier=org.plan_tier,
             is_active=org.is_active,
@@ -119,6 +121,8 @@ async def create_organization(
         industry=body.industry,
         business_phone=body.business_phone,
         vapi_assistant_id=body.vapi_assistant_id,
+        vapi_phone_number=body.vapi_phone_number,
+        agent_name=body.agent_name,
         vapi_phone_number_id=body.vapi_phone_number_id,
         plan_tier=body.plan_tier,
         is_active=body.is_active,
@@ -167,6 +171,7 @@ async def update_organization(
                 )
 
     old_phone = org.business_phone
+    old_vapi_phone = org.vapi_phone_number
     for field, value in data.items():
         setattr(org, field, value)
 
@@ -180,7 +185,10 @@ async def update_organization(
     # Tenant routing may have changed; clear cached phone->org bindings.
     tenant_service = TenantService(db)
     tenant_service.invalidate_cache(old_phone)
+    tenant_service.invalidate_cache(old_vapi_phone)
     if org.business_phone:
         tenant_service.invalidate_cache(org.business_phone)
+    if org.vapi_phone_number:
+        tenant_service.invalidate_cache(org.vapi_phone_number)
 
     return org

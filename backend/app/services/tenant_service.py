@@ -63,11 +63,30 @@ class TenantService:
             if cached is not None:
                 return cached
 
-            stmt = select(Organization).where(
-                Organization.business_phone == normalized,
-                Organization.is_active.is_(True),
-            )
-            org = (await self.db.execute(stmt)).scalar_one_or_none()
+            org = (
+                await self.db.execute(
+                    select(Organization).where(
+                        Organization.vapi_phone_number == normalized,
+                        Organization.is_active.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if org is None:
+                org = (
+                    await self.db.execute(
+                        select(Organization).where(
+                            Organization.business_phone == normalized,
+                            Organization.is_active.is_(True),
+                        )
+                    )
+                ).scalar_one_or_none()
+
+            if org is None:
+                env_phone = normalize_phone(get_settings().VAPI_PHONE_NUMBER)
+                if env_phone and normalized == env_phone:
+                    org = await self.get_tenant_by_id(SEED_ORG_ID)
+
             if org is not None:
                 with _CACHE_LOCK:
                     _PHONE_CACHE[normalized] = org

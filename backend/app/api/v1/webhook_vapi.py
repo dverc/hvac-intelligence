@@ -293,6 +293,10 @@ async def handle_vapi_webhook(
                             )
 
                 system_prompt = enrichment["system_prompt_injection"]
+                if call_start_org is not None and call_start_org.agent_name:
+                    system_prompt = (
+                        f"Your name is {call_start_org.agent_name}. {system_prompt}"
+                    )
                 if call_start_org is not None:
                     org_settings_dict = (
                         cached_org_settings
@@ -317,6 +321,13 @@ async def handle_vapi_webhook(
                         "systemPrompt": system_prompt,
                     },
                 }
+                assistant_id = None
+                if call_start_org is not None and call_start_org.vapi_assistant_id:
+                    assistant_id = call_start_org.vapi_assistant_id.strip()
+                if not assistant_id:
+                    assistant_id = get_settings().VAPI_ASSISTANT_ID
+                if assistant_id:
+                    assistant_overrides["assistantId"] = assistant_id
                 if enrichment.get("first_message"):
                     assistant_overrides["firstMessage"] = enrichment["first_message"]
 

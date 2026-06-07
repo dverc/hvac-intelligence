@@ -33,7 +33,9 @@ class Organization(Base):
     slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     industry: Mapped[str] = mapped_column(String(50), nullable=False)
     business_phone: Mapped[str | None] = mapped_column(String(20), unique=True)
-    vapi_assistant_id: Mapped[str | None] = mapped_column(String(128))
+    vapi_assistant_id: Mapped[str | None] = mapped_column(String(255))
+    vapi_phone_number: Mapped[str | None] = mapped_column(String(50))
+    agent_name: Mapped[str | None] = mapped_column(String(100))
     vapi_phone_number_id: Mapped[str | None] = mapped_column(String(128))
     plan_tier: Mapped[str] = mapped_column(
         String(50), nullable=False, server_default="starter"

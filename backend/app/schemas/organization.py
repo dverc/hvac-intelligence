@@ -40,6 +40,8 @@ class OrganizationCreate(BaseModel):
     industry: Industry
     business_phone: Optional[str] = None
     vapi_assistant_id: Optional[str] = None
+    vapi_phone_number: Optional[str] = None
+    agent_name: Optional[str] = None
     vapi_phone_number_id: Optional[str] = None
     plan_tier: PlanTier = "starter"
     is_active: bool = True
@@ -56,6 +58,8 @@ class OrganizationUpdate(BaseModel):
     industry: Optional[Industry] = None
     business_phone: Optional[str] = None
     vapi_assistant_id: Optional[str] = None
+    vapi_phone_number: Optional[str] = None
+    agent_name: Optional[str] = None
     vapi_phone_number_id: Optional[str] = None
     plan_tier: Optional[PlanTier] = None
     is_active: Optional[bool] = None
@@ -71,6 +75,8 @@ class OrganizationOut(BaseModel):
     industry: str
     business_phone: Optional[str] = None
     vapi_assistant_id: Optional[str] = None
+    vapi_phone_number: Optional[str] = None
+    agent_name: Optional[str] = None
     vapi_phone_number_id: Optional[str] = None
     plan_tier: str
     is_active: bool
