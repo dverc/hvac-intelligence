@@ -649,6 +649,197 @@ def send_booking_confirmation_sms(self, job_id: str) -> dict[str, Any]:
         session.close()
 
 
+def _customer_address(customer: Customer) -> str:
+    parts = [
+        part
+        for part in (
+            customer.address_line1,
+            customer.city,
+            customer.state,
+            customer.zip,
+        )
+        if part
+    ]
+    return ", ".join(parts) if parts else "your service address"
+
+
+def _format_job_window(job: DispatchJob) -> str:
+    if job.scheduled_window_start and job.scheduled_window_end:
+        return (
+            f"{job.scheduled_window_start.strftime('%a %b %d, %I:%M %p')}–"
+            f"{job.scheduled_window_end.strftime('%I:%M %p')}"
+        )
+    return "your scheduled window"
+
+
+def _issue_type_label(issue_type: str | None) -> str:
+    return (issue_type or "service").replace("_", " ").lower()
+
+
+def _hours_until_appointment(window_start: datetime, now: datetime) -> float:
+    start = window_start
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    else:
+        start = start.astimezone(timezone.utc)
+    return (start - now).total_seconds() / 3600
+
+
+def _minutes_until_appointment(window_start: datetime, now: datetime) -> float:
+    return _hours_until_appointment(window_start, now) * 60
+
+
+@celery_app.task(name="app.pipeline.tasks.send_appointment_reminder_24h", **_STANDARD_TASK_RETRY)
+def send_appointment_reminder_24h(self, job_id: str) -> dict[str, Any]:
+    """Send an SMS reminder 24 hours before the appointment window."""
+    logger.info(
+        "Task starting: send_appointment_reminder_24h attempt=%s job=%s",
+        self.request.retries + 1,
+        job_id,
+    )
+    session = get_sync_session()
+    try:
+        job = session.get(DispatchJob, uuid.UUID(job_id))
+        if job is None:
+            logger.warning("send_appointment_reminder_24h: job %s not found", job_id)
+            return {"status": "error", "reason": "job_not_found"}
+
+        if job.scheduled_window_start is None:
+            logger.warning(
+                "send_appointment_reminder_24h: job %s has no scheduled_window_start",
+                job_id,
+            )
+            return {"status": "error", "reason": "missing_window"}
+
+        now = datetime.now(timezone.utc)
+        hours_until = _hours_until_appointment(job.scheduled_window_start, now)
+        if hours_until > 26 or hours_until < 22:
+            logger.warning(
+                "send_appointment_reminder_24h: job %s outside 22–26h window (%.2fh)",
+                job_id,
+                hours_until,
+            )
+            return {"status": "skipped", "reason": "outside_window", "job_id": job_id}
+
+        customer = session.get(Customer, job.customer_id)
+        if customer is None:
+            logger.warning(
+                "send_appointment_reminder_24h: customer missing for job %s", job_id
+            )
+            return {"status": "error", "reason": "customer_not_found"}
+
+        if not customer.phone_primary:
+            logger.warning(
+                "send_appointment_reminder_24h: no phone for customer on job %s",
+                job_id,
+            )
+            return {"status": "error", "reason": "missing_phone"}
+
+        technician_name = "our technician"
+        if job.technician_id is not None:
+            tech = session.get(Technician, job.technician_id)
+            if tech is not None:
+                technician_name = tech.full_name
+
+        first_name = customer.full_name.split()[0] if customer.full_name.strip() else "there"
+        message = (
+            f"Hi {first_name}, reminder: your {_issue_type_label(job.issue_type)} "
+            f"appointment is tomorrow. {technician_name} will arrive at "
+            f"{_customer_address(customer)} during {_format_job_window(job)}. "
+            "Reply STOP to opt out."
+        )
+        sent = send_sms(customer.phone_primary, message)
+        if not sent:
+            logger.warning("24h appointment reminder SMS not sent for job %s", job_id)
+            return {"status": "skipped", "job_id": job_id}
+
+        job.reminder_24h_sent_at = now
+        session.commit()
+        logger.info("24h appointment reminder SMS sent for job %s", job_id)
+        return {"status": "ok", "job_id": job_id}
+    except Exception as exc:
+        session.rollback()
+        logger.exception("send_appointment_reminder_24h failed for job %s", job_id)
+        return {"status": "error", "reason": str(exc)}
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.pipeline.tasks.send_appointment_reminder_1h", **_STANDARD_TASK_RETRY)
+def send_appointment_reminder_1h(self, job_id: str) -> dict[str, Any]:
+    """Send an SMS reminder 1 hour before the appointment window."""
+    logger.info(
+        "Task starting: send_appointment_reminder_1h attempt=%s job=%s",
+        self.request.retries + 1,
+        job_id,
+    )
+    session = get_sync_session()
+    try:
+        job = session.get(DispatchJob, uuid.UUID(job_id))
+        if job is None:
+            logger.warning("send_appointment_reminder_1h: job %s not found", job_id)
+            return {"status": "error", "reason": "job_not_found"}
+
+        if job.scheduled_window_start is None:
+            logger.warning(
+                "send_appointment_reminder_1h: job %s has no scheduled_window_start",
+                job_id,
+            )
+            return {"status": "error", "reason": "missing_window"}
+
+        now = datetime.now(timezone.utc)
+        minutes_until = _minutes_until_appointment(job.scheduled_window_start, now)
+        if minutes_until > 90 or minutes_until < 30:
+            logger.warning(
+                "send_appointment_reminder_1h: job %s outside 30–90m window (%.1fm)",
+                job_id,
+                minutes_until,
+            )
+            return {"status": "skipped", "reason": "outside_window", "job_id": job_id}
+
+        customer = session.get(Customer, job.customer_id)
+        if customer is None:
+            logger.warning(
+                "send_appointment_reminder_1h: customer missing for job %s", job_id
+            )
+            return {"status": "error", "reason": "customer_not_found"}
+
+        if not customer.phone_primary:
+            logger.warning(
+                "send_appointment_reminder_1h: no phone for customer on job %s",
+                job_id,
+            )
+            return {"status": "error", "reason": "missing_phone"}
+
+        technician_name = "our technician"
+        if job.technician_id is not None:
+            tech = session.get(Technician, job.technician_id)
+            if tech is not None:
+                technician_name = tech.full_name
+
+        first_name = customer.full_name.split()[0] if customer.full_name.strip() else "there"
+        message = (
+            f"Hi {first_name}, your technician {technician_name} is on the way! "
+            f"Expected arrival at {_customer_address(customer)} within "
+            f"{_format_job_window(job)}. Reply STOP to opt out."
+        )
+        sent = send_sms(customer.phone_primary, message)
+        if not sent:
+            logger.warning("1h appointment reminder SMS not sent for job %s", job_id)
+            return {"status": "skipped", "job_id": job_id}
+
+        job.reminder_1h_sent_at = now
+        session.commit()
+        logger.info("1h appointment reminder SMS sent for job %s", job_id)
+        return {"status": "ok", "job_id": job_id}
+    except Exception as exc:
+        session.rollback()
+        logger.exception("send_appointment_reminder_1h failed for job %s", job_id)
+        return {"status": "error", "reason": str(exc)}
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.pipeline.tasks.sync_google_drive_folders", **_STANDARD_TASK_RETRY)
 def sync_google_drive_folders(self) -> dict[str, Any]:
     """Sync Google Drive knowledge folders for connected orgs (Phase 9)."""

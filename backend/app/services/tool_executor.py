@@ -304,6 +304,59 @@ class ToolExecutor:
                         "Failed to enqueue booking confirmation SMS for job %s",
                         job_id,
                     )
+                try:
+                    from datetime import datetime, timedelta, timezone
+
+                    from app.pipeline.tasks import (
+                        send_appointment_reminder_1h,
+                        send_appointment_reminder_24h,
+                    )
+
+                    tz_name = (
+                        await self.dispatch_service._get_org_timezone(self.org_id)
+                        if self.org_id is not None
+                        else "America/Los_Angeles"
+                    )
+                    parsed_window = parse_preferred_window(
+                        parsed.preferred_window, tz_name
+                    )
+                    scheduled_window_start, _ = parsed_window.to_datetimes(tz_name)
+                    now = datetime.now(timezone.utc)
+                    if scheduled_window_start.tzinfo is None:
+                        scheduled_window_start = scheduled_window_start.replace(
+                            tzinfo=timezone.utc
+                        )
+                    else:
+                        scheduled_window_start = scheduled_window_start.astimezone(
+                            timezone.utc
+                        )
+
+                    eta_24h = scheduled_window_start - timedelta(hours=24)
+                    if eta_24h > now:
+                        send_appointment_reminder_24h.apply_async(
+                            args=[str(job_id)], eta=eta_24h
+                        )
+                    else:
+                        logger.info(
+                            "Skipping 24h reminder for job %s — eta in the past",
+                            job_id,
+                        )
+
+                    eta_1h = scheduled_window_start - timedelta(hours=1)
+                    if eta_1h > now:
+                        send_appointment_reminder_1h.apply_async(
+                            args=[str(job_id)], eta=eta_1h
+                        )
+                    else:
+                        logger.info(
+                            "Skipping 1h reminder for job %s — eta in the past",
+                            job_id,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Failed to schedule appointment reminder SMS for job %s",
+                        job_id,
+                    )
             if self.org_id is not None and job_id:
                 await log_action(
                     self.db,

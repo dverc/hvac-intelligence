@@ -91,6 +91,12 @@ class DispatchJob(Base):
     scheduled_window_end: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    reminder_24h_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reminder_1h_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     google_calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255))
     external_job_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     actual_arrival: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
