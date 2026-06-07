@@ -37,6 +37,7 @@ async def test_call_analytics_returns_200_with_correct_structure(
     body = response.json()
     assert set(body) == {
         "summary",
+        "revenue_impact",
         "calls_by_day",
         "calls_by_hour",
         "top_issue_types",
@@ -113,3 +114,65 @@ async def test_call_analytics_calls_by_hour_always_has_24_entries(api_client):
     assert len(calls_by_hour) == 24
     assert [entry["hour"] for entry in calls_by_hour] == list(range(24))
     assert all(isinstance(entry["count"], int) for entry in calls_by_hour)
+
+
+@pytest.mark.asyncio
+async def test_call_analytics_includes_revenue_impact_with_roi_multiplier(
+    api_client,
+    seeded_customer,
+    db_session,
+):
+    del seeded_customer
+    transcript = (
+        await db_session.execute(
+            select(CallTranscript).where(CallTranscript.call_id == "call-seed-001")
+        )
+    ).scalar_one()
+    job = (
+        await db_session.execute(
+            select(DispatchJob).where(DispatchJob.job_number == "DX-SEED-001")
+        )
+    ).scalar_one()
+    transcript.dispatch_job_id = job.job_id
+    transcript.call_cost_usd = 1.16
+    await db_session.flush()
+
+    response = await api_client.get(
+        "/api/v1/analytics/calls",
+        params={"org_id": str(SEED_ORG_ID), "days": 30},
+    )
+
+    assert response.status_code == 200
+    revenue = response.json()["revenue_impact"]
+    assert "roi_multiplier" in revenue
+    assert revenue["estimated_bookings_value_usd"] == pytest.approx(
+        response.json()["summary"]["calls_booked"] * 150.0
+    )
+    assert revenue["ai_cost_usd"] == pytest.approx(
+        response.json()["summary"]["total_cost_usd"]
+    )
+    assert isinstance(revenue["roi_multiplier"], float)
+
+
+@pytest.mark.asyncio
+async def test_call_analytics_calls_abandoned_counts_short_calls(
+    api_client,
+    db_session,
+    seeded_customer,
+):
+    del seeded_customer
+    transcript = (
+        await db_session.execute(
+            select(CallTranscript).where(CallTranscript.call_id == "call-seed-001")
+        )
+    ).scalar_one()
+    transcript.duration_seconds = 20
+    await db_session.flush()
+
+    response = await api_client.get(
+        "/api/v1/analytics/calls",
+        params={"org_id": str(SEED_ORG_ID), "days": 30},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["calls_abandoned"] == 1

@@ -31,6 +31,7 @@ from app.schemas.analytics import (
     MonthlyTrendPoint,
     RetentionEventItem,
     RetentionEventsResponse,
+    RevenueImpact,
     SavedByAIResponse,
     SentimentBreakdown,
     TimelineEvent,
@@ -935,6 +936,11 @@ class AnalyticsService:
         calls_escalated = sum(
             1 for t in transcripts if _transcript_is_escalated(t)
         )
+        calls_abandoned = sum(
+            1
+            for t in transcripts
+            if t.duration_seconds is not None and t.duration_seconds < 30
+        )
 
         durations = [
             t.duration_seconds for t in transcripts if t.duration_seconds is not None
@@ -947,6 +953,10 @@ class AnalyticsService:
         total_cost = round(sum(costs), 2) if costs else 0.0
         booking_rate = (
             round((calls_booked / total_calls) * 100, 1) if total_calls else 0.0
+        )
+        estimated_bookings_value = round(calls_booked * 150.0, 2)
+        roi_multiplier = (
+            round(estimated_bookings_value / total_cost, 1) if total_cost > 0 else 0.0
         )
 
         day_counts: Counter = Counter(
@@ -1006,9 +1016,15 @@ class AnalyticsService:
                 total_calls=total_calls,
                 calls_booked=calls_booked,
                 calls_escalated=calls_escalated,
+                calls_abandoned=calls_abandoned,
                 booking_rate=booking_rate,
                 avg_duration_seconds=avg_duration,
                 total_cost_usd=total_cost,
+            ),
+            revenue_impact=RevenueImpact(
+                estimated_bookings_value_usd=estimated_bookings_value,
+                ai_cost_usd=total_cost,
+                roi_multiplier=roi_multiplier,
             ),
             calls_by_day=calls_by_day,
             calls_by_hour=calls_by_hour,

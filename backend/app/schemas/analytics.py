@@ -151,9 +151,16 @@ class CallAnalyticsSummary(BaseModel):
     total_calls: int
     calls_booked: int
     calls_escalated: int
+    calls_abandoned: int
     booking_rate: float
     avg_duration_seconds: float
     total_cost_usd: float
+
+
+class RevenueImpact(BaseModel):
+    estimated_bookings_value_usd: float
+    ai_cost_usd: float
+    roi_multiplier: float
 
 
 class CallsByDayItem(BaseModel):
@@ -179,6 +186,7 @@ class SentimentBreakdown(BaseModel):
 
 class CallAnalyticsResponse(BaseModel):
     summary: CallAnalyticsSummary
+    revenue_impact: RevenueImpact
     calls_by_day: list[CallsByDayItem]
     calls_by_hour: list[CallsByHourItem]
     top_issue_types: list[TopIssueTypeItem]

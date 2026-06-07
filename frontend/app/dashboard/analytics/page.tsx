@@ -173,6 +173,24 @@ export default function AnalyticsPage() {
             />
           </section>
 
+          <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <StatCard
+              label="Est. Revenue"
+              value={data.revenue_impact.estimated_bookings_value_usd.toLocaleString(
+                "en-US",
+                { style: "currency", currency: "USD", maximumFractionDigits: 0 },
+              )}
+            />
+            <StatCard
+              label="AI Cost"
+              value={`$${data.revenue_impact.ai_cost_usd.toFixed(2)}`}
+            />
+            <StatCard
+              label="ROI"
+              value={`${data.revenue_impact.roi_multiplier}x`}
+            />
+          </section>
+
           <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <h2 className="mb-4 text-lg font-semibold text-gray-900 dark:text-slate-100">
               Calls Per Day

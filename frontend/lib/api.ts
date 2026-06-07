@@ -285,9 +285,15 @@ export interface CallAnalyticsResponse {
     total_calls: number;
     calls_booked: number;
     calls_escalated: number;
+    calls_abandoned: number;
     booking_rate: number;
     avg_duration_seconds: number;
     total_cost_usd: number;
+  };
+  revenue_impact: {
+    estimated_bookings_value_usd: number;
+    ai_cost_usd: number;
+    roi_multiplier: number;
   };
   calls_by_day: { date: string; count: number }[];
   calls_by_hour: { hour: number; count: number }[];
