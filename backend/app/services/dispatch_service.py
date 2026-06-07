@@ -176,7 +176,7 @@ class DispatchService:
         jobber = JobberService(self.db)
         if await jobber.has_active_connection(org_id):
             try:
-                await jobber.create_job_in_jobber(org_id, job, technician, customer)
+                await jobber.create_job_in_jobber(org_id, job, customer, technician)
             except Exception as exc:
                 logger.exception(
                     "Jobber job creation failed for job %s: %s",

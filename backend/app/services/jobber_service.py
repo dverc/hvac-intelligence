@@ -439,6 +439,18 @@ class JobberService:
     async def _find_technician_by_jobber_id(
         self, org_id: uuid.UUID, jobber_user_id: str
     ) -> Technician | None:
+        external_id = _jobber_external_id("jobber", jobber_user_id)
+        match = (
+            await self.db.execute(
+                select(Technician).where(
+                    Technician.org_id == org_id,
+                    Technician.external_id == external_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if match:
+            return match
+
         techs = (
             await self.db.execute(
                 select(Technician).where(Technician.org_id == org_id)
@@ -468,10 +480,12 @@ class JobberService:
             full_name = f"{name.get('first', '')} {name.get('last', '')}".strip() or "Jobber User"
             email = (user.get("email") or {}).get("raw")
 
+            external_id = _jobber_external_id("jobber", jobber_id)
             existing = await self._find_technician_by_jobber_id(org_id, jobber_id)
             if existing:
                 existing.full_name = full_name
                 existing.email = email
+                existing.external_id = external_id
                 meta = dict(existing.metadata_ or {})
                 meta["jobber_user_id"] = jobber_id
                 existing.metadata_ = meta
@@ -480,6 +494,7 @@ class JobberService:
                     Technician(
                         org_id=org_id,
                         employee_number=f"JB-{jobber_id}"[:30],
+                        external_id=external_id,
                         full_name=full_name,
                         email=email,
                         hire_date=date.today(),
@@ -642,10 +657,18 @@ class JobberService:
         if dispatch_job.scheduled_window_end:
             job_input["endAt"] = dispatch_job.scheduled_window_end.isoformat()
 
-        tech_meta = technician.metadata_ or {}
-        jobber_user_id = tech_meta.get("jobber_user_id")
+        jobber_user_id = _parse_jobber_external_id(technician.external_id, "jobber")
+        if not jobber_user_id:
+            tech_meta = technician.metadata_ or {}
+            jobber_user_id = tech_meta.get("jobber_user_id")
         if jobber_user_id:
             job_input["assignedTo"] = [str(jobber_user_id)]
+        else:
+            logger.info(
+                "Creating Jobber job %s without technician assignment — "
+                "technician has no Jobber external_id",
+                dispatch_job.job_number,
+            )
 
         try:
             payload = await self.graphql_query(

@@ -57,6 +57,7 @@ class Technician(Base):
         server_default=text(f"'{SEED_ORG_ID_STR}'"),
     )
     employee_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id: Mapped[Optional[str]] = mapped_column(String(64))
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String(20))
     email: Mapped[Optional[str]] = mapped_column(String(255))
