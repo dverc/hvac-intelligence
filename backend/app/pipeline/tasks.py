@@ -642,9 +642,9 @@ def send_booking_confirmation_sms(self, job_id: str) -> dict[str, Any]:
             return {"status": "ok", "job_id": job_id}
         logger.warning("Booking confirmation SMS not sent for job %s", job_id)
         return {"status": "skipped", "job_id": job_id}
-    except Exception as exc:
+    except Exception:
         logger.exception("send_booking_confirmation_sms failed for job %s", job_id)
-        return {"status": "error", "reason": str(exc)}
+        raise
     finally:
         session.close()
 
@@ -757,10 +757,10 @@ def send_appointment_reminder_24h(self, job_id: str) -> dict[str, Any]:
         session.commit()
         logger.info("24h appointment reminder SMS sent for job %s", job_id)
         return {"status": "ok", "job_id": job_id}
-    except Exception as exc:
+    except Exception:
         session.rollback()
         logger.exception("send_appointment_reminder_24h failed for job %s", job_id)
-        return {"status": "error", "reason": str(exc)}
+        raise
     finally:
         session.close()
 
@@ -832,10 +832,10 @@ def send_appointment_reminder_1h(self, job_id: str) -> dict[str, Any]:
         session.commit()
         logger.info("1h appointment reminder SMS sent for job %s", job_id)
         return {"status": "ok", "job_id": job_id}
-    except Exception as exc:
+    except Exception:
         session.rollback()
         logger.exception("send_appointment_reminder_1h failed for job %s", job_id)
-        return {"status": "error", "reason": str(exc)}
+        raise
     finally:
         session.close()
 

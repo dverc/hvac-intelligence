@@ -19,6 +19,18 @@ async def verify_api_key(request: Request) -> None:
         )
 
 
+async def verify_dashboard_api_key(request: Request) -> None:
+    """Require API key for dashboard routes; skip JWT auth endpoints."""
+    path = request.url.path.rstrip("/")
+    if path in {
+        "/api/v1/auth/login",
+        "/api/v1/auth/logout",
+        "/api/v1/auth/me",
+    }:
+        return
+    await verify_api_key(request)
+
+
 def request_has_valid_api_key(request: Request) -> bool:
     """Check API key without raising — used by OpenAPI docs middleware."""
     settings = get_settings()

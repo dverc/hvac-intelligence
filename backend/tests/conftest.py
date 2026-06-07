@@ -64,6 +64,7 @@ _DEFAULTS = {
     "MODEL_ARTIFACTS_PATH": "./ml/artifacts",
     "RAG_MOCK_INDEX_PATH": "data/knowledge/.mock_vector_index.json",
     "DASHBOARD_API_KEY": "test-api-key-for-tests",
+    "JWT_SECRET_KEY": "test-jwt-secret-for-tests",
     "ENVIRONMENT": "development",
     "VAPI_WEBHOOK_HMAC_BYPASS": "false",
     "GOOGLE_CLIENT_ID": "test-google-client-id.apps.googleusercontent.com",

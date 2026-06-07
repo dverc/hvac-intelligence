@@ -14,6 +14,7 @@ from app.models.service_catalog import ServiceCatalog
 from app.models.support_ticket import SupportTicket
 from app.models.technician import Technician
 from app.models.technician_schedule import TechnicianSchedule
+from app.models.user import User
 
 __all__ = [
     "AuditLog",
@@ -32,4 +33,5 @@ __all__ = [
     "SupportTicket",
     "Technician",
     "TechnicianSchedule",
+    "User",
 ]

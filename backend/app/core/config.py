@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # Dashboard API authentication (required — no default; set in .env)
     DASHBOARD_API_KEY: str
 
+    # JWT authentication (set JWT_SECRET_KEY in .env for production)
+    JWT_SECRET_KEY: str = "dev-secret-change-in-production"
+
     # Dashboard tenant scoping (stopgap until JWT carries org in a later phase).
     # Defaults to the deterministic seed org so single-tenant dev keeps working.
     DASHBOARD_ORG_ID: str = "00000000-0000-4000-8000-000000000001"
@@ -107,6 +110,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DASHBOARD_API_KEY must be set to a non-empty value. "
                 "Generate one with: openssl rand -hex 32"
+            )
+        if (
+            self.ENVIRONMENT == "production"
+            and self.JWT_SECRET_KEY == "dev-secret-change-in-production"
+        ):
+            raise ValueError(
+                "JWT_SECRET_KEY must be changed from the default value in production"
             )
         if self.ENVIRONMENT == "production" and self.VAPI_WEBHOOK_HMAC_BYPASS:
             warnings.warn(

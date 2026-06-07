@@ -12,7 +12,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.v1 import api_router, google_oauth_router, jobber_oauth_router, vapi_router
-from app.core.auth import request_has_valid_api_key, verify_api_key
+from app.core.auth import (
+    request_has_valid_api_key,
+    verify_api_key,
+    verify_dashboard_api_key,
+)
 from app.core.config import get_settings
 from app.core.logging_config import configure_logging
 from app.core.rate_limit import limiter
@@ -85,7 +89,7 @@ async def health() -> dict[str, str]:
 app.include_router(vapi_router)
 app.include_router(google_oauth_router)
 app.include_router(jobber_oauth_router)
-app.include_router(api_router, dependencies=[Depends(verify_api_key)])
+app.include_router(api_router, dependencies=[Depends(verify_dashboard_api_key)])
 
 Instrumentator().instrument(app)
 

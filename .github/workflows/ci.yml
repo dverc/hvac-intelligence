@@ -30,6 +30,7 @@ jobs:
       MODEL_ARTIFACTS_PATH: ../ml/artifacts
       RAG_MOCK_INDEX_PATH: ../data/knowledge/.mock_vector_index.json
       DASHBOARD_API_KEY: test-api-key-for-tests
+      JWT_SECRET_KEY: test-jwt-secret-for-ci
       ENVIRONMENT: test
       VAPI_WEBHOOK_HMAC_BYPASS: "false"
       DASHBOARD_ORG_ID: 00000000-0000-4000-8000-000000000001
@@ -54,6 +55,16 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U hvac_user -d hvac_intel"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
