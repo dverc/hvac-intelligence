@@ -39,6 +39,12 @@ from app.schemas.tools import (
     UpdateDispatchArgs,
 )
 from app.services.availability_service import AvailabilityService
+from app.services.audit_service import (
+    ACTOR_VAPI,
+    AUDIT_CREATE,
+    AUDIT_UPDATE,
+    log_action,
+)
 from app.services.churn_service import ChurnService
 from app.services.customer_service import CustomerService, normalize_phone
 from app.services.dispatch_service import DispatchService
@@ -298,6 +304,21 @@ class ToolExecutor:
                         "Failed to enqueue booking confirmation SMS for job %s",
                         job_id,
                     )
+            if self.org_id is not None and job_id:
+                await log_action(
+                    self.db,
+                    str(self.org_id),
+                    ACTOR_VAPI,
+                    AUDIT_CREATE,
+                    "dispatch_job",
+                    str(job_id),
+                    new_value={
+                        "customer_id": parsed.customer_id,
+                        "issue_type": parsed.issue_type,
+                        "priority": parsed.priority,
+                    },
+                    call_id=get_call_id() or None,
+                )
             return json.dumps(result)
         finally:
             await redis_client.aclose()
@@ -550,6 +571,22 @@ class ToolExecutor:
             priority=parsed.priority,
             preferred_callback_time=parsed.preferred_callback_time,
         )
+        if self.org_id is not None:
+            await log_action(
+                    self.db,
+                    str(self.org_id),
+                    ACTOR_VAPI,
+                    AUDIT_CREATE,
+                    "support_ticket",
+                    ticket["ticket_id"],
+                    new_value={
+                        "customer_id": ticket["customer_id"],
+                        "ticket_type": ticket["ticket_type"],
+                        "subject": ticket["subject"],
+                        "priority": ticket["priority"],
+                    },
+                    call_id=get_call_id() or None,
+                )
         return json.dumps({"success": True, "ticket": ticket})
 
     async def execute_create_customer(self, **kwargs: Any) -> str:
@@ -557,6 +594,20 @@ class ToolExecutor:
         result = await self.customer_service.create_customer(parsed, self.org_id)
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "Failed to create customer")})
+        if self.org_id is not None:
+            await log_action(
+                    self.db,
+                    str(self.org_id),
+                    ACTOR_VAPI,
+                    AUDIT_CREATE,
+                    "customer",
+                    result["customer_id"],
+                    new_value={
+                        "name": parsed.full_name,
+                        "phone": parsed.phone_primary,
+                    },
+                    call_id=get_call_id() or None,
+                )
         return json.dumps(
             {
                 "status": "created",
@@ -630,6 +681,24 @@ class ToolExecutor:
                 )
             )
 
+        audit_new_value: dict[str, Any] = {}
+        for key, value in payload_data.items():
+            if hasattr(value, "model_dump"):
+                audit_new_value[key] = value.model_dump()
+            else:
+                audit_new_value[key] = value
+        if self.org_id is not None:
+            await log_action(
+                    self.db,
+                    str(self.org_id),
+                    ACTOR_VAPI,
+                    AUDIT_UPDATE,
+                    "customer",
+                    parsed.customer_id,
+                    new_value=audit_new_value,
+                    call_id=get_call_id() or None,
+                )
+
         return json.dumps(
             {
                 "status": "updated",
@@ -645,6 +714,20 @@ class ToolExecutor:
         result = await equipment_service.create_equipment(parsed, self.org_id)
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "Failed to create equipment")})
+        if self.org_id is not None:
+            await log_action(
+                    self.db,
+                    str(self.org_id),
+                    ACTOR_VAPI,
+                    AUDIT_CREATE,
+                    "equipment",
+                    result["equipment_id"],
+                    new_value={
+                        "make": result.get("make"),
+                        "model": result.get("model"),
+                    },
+                    call_id=get_call_id() or None,
+                )
         return json.dumps(
             {
                 "status": "created",
@@ -661,6 +744,17 @@ class ToolExecutor:
         result = await self.dispatch_service.update_job(parsed, self.org_id)
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "Failed to update dispatch")})
+        if self.org_id is not None:
+            await log_action(
+                    self.db,
+                    str(self.org_id),
+                    ACTOR_VAPI,
+                    AUDIT_UPDATE,
+                    "dispatch_job",
+                    str(result["job_id"]),
+                    new_value=parsed.model_dump(exclude_none=True),
+                    call_id=get_call_id() or None,
+                )
         return json.dumps(
             {
                 "status": "updated",

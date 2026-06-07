@@ -1,3 +1,4 @@
+from app.models.audit_log import AuditLog
 from app.models.call_transcript import CallTranscript
 from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
@@ -15,6 +16,7 @@ from app.models.technician import Technician
 from app.models.technician_schedule import TechnicianSchedule
 
 __all__ = [
+    "AuditLog",
     "CallTranscript",
     "ChurnScore",
     "Customer",
