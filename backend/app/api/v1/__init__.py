@@ -9,6 +9,7 @@ from app.api.v1 import (
     imports,
     integrations,
     knowledge,
+    onboarding,
     organizations,
     scheduling,
     stream,
@@ -19,6 +20,7 @@ from app.core.tenant import get_dashboard_org_id
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(organizations.router)
+api_router.include_router(onboarding.router)
 api_router.include_router(calls.router)
 api_router.include_router(customers.router)
 api_router.include_router(churn.router)

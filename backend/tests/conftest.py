@@ -85,6 +85,24 @@ import app.models  # noqa: E402,F401  (register all ORM tables on Base.metadata)
 get_settings.cache_clear()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def relax_test_rate_limits():
+    """
+    Raise SlowAPI global application limit during tests so the shared
+    127.0.0.1 key from ASGITransport does not trip 60/minute mid-suite.
+    Production limiter config in app/core/rate_limit.py is unchanged.
+    """
+    from app.core.rate_limit import limiter
+
+    original_providers: list[str | object] = []
+    for group in limiter._application_limits:
+        original_providers.append(group._LimitGroup__limit_provider)
+        group._LimitGroup__limit_provider = "10000/minute"
+    yield
+    for group, original in zip(limiter._application_limits, original_providers):
+        group._LimitGroup__limit_provider = original
+
+
 def sign_vapi_payload(payload: dict[str, Any], secret: str | None = None) -> tuple[bytes, str]:
     """HMAC-SHA256 signature matching production verify_vapi_signature."""
     secret = secret or get_settings().VAPI_WEBHOOK_SECRET

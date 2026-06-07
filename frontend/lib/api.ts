@@ -606,6 +606,32 @@ export function createOrganization(data: OrganizationCreatePayload) {
   return apiPostJson<OrganizationRecord>("/api/v1/organizations", data);
 }
 
+export type OnboardingProvisionPayload = {
+  business_name: string;
+  trade_type: string;
+  phone_number: string;
+  agent_name: string;
+  timezone: string;
+  business_hours: Record<string, { open: string; close: string } | null>;
+  notification_email: string;
+  service_zip_codes?: string[];
+};
+
+export type OnboardingProvisionResponse = {
+  org_id: string;
+  org_name: string;
+  slug: string;
+  agent_name: string;
+  dashboard_api_key: string;
+};
+
+export function provisionOnboarding(data: OnboardingProvisionPayload) {
+  return apiPostJson<OnboardingProvisionResponse>(
+    "/api/v1/onboarding/provision",
+    data,
+  );
+}
+
 export function updateOrganizationSettings(
   orgId: string,
   settings: Record<string, unknown>,

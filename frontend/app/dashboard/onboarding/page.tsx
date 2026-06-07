@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import {
-  createOrganization,
   getImportTemplate,
   importCustomers,
   importEquipment,
+  provisionOnboarding,
   setupDriveFolder,
   updateOrganizationSettings,
   uploadKnowledgeDocument,
@@ -31,6 +32,19 @@ const ISSUE_DEFAULTS: Record<string, string> = {
     "POWER_OUTAGE, CIRCUIT_BREAKER, WIRING, INSTALLATION, EMERGENCY",
 };
 
+const DEFAULT_BUSINESS_HOURS: Record<
+  string,
+  { open: string; close: string } | null
+> = {
+  monday: { open: "08:00", close: "17:00" },
+  tuesday: { open: "08:00", close: "17:00" },
+  wednesday: { open: "08:00", close: "17:00" },
+  thursday: { open: "08:00", close: "17:00" },
+  friday: { open: "08:00", close: "17:00" },
+  saturday: null,
+  sunday: null,
+};
+
 const VAPI_TOOLS = [
   "schedule_dispatch",
   "query_churn_score",
@@ -46,27 +60,26 @@ const VAPI_TOOLS = [
   "check_availability",
 ];
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 100);
-}
-
 export default function OnboardingPage() {
+  const router = useRouter();
   const [step, setStep] = useState(0);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [orgName, setOrgName] = useState("");
+  const [agentName, setAgentName] = useState("");
   const [industry, setIndustry] = useState("hvac");
   const [error, setError] = useState<string | null>(null);
+  const [provisioning, setProvisioning] = useState(false);
+  const [provisionComplete, setProvisionComplete] = useState(false);
 
   const [biz, setBiz] = useState({
     org_name: "",
     industry: "hvac",
     timezone: "America/Los_Angeles",
     business_phone: "",
-    plan_tier: "starter",
+    agent_name: "Alex",
+    notification_email: "",
+    service_zip_codes: "",
+    business_hours: DEFAULT_BUSINESS_HOURS,
   });
 
   const [customerFile, setCustomerFile] = useState<File | null>(null);
@@ -93,28 +106,25 @@ export default function OnboardingPage() {
   const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
   const back = () => setStep((s) => Math.max(s - 1, 0));
 
-  const handleStep1 = async () => {
+  const handleStep1 = () => {
     setError(null);
-    try {
-      const created = await createOrganization({
-        org_name: biz.org_name,
-        slug: slugify(biz.org_name),
-        industry: biz.industry,
-        business_phone: biz.business_phone || undefined,
-        plan_tier: biz.plan_tier,
-        settings: { timezone: biz.timezone, pinecone_namespace: "faq_general" },
-      });
-      setOrgId(created.org_id);
-      setOrgName(created.org_name);
-      setIndustry(created.industry);
-      setAgent((a) => ({
-        ...a,
-        issue_taxonomy: ISSUE_DEFAULTS[created.industry] || ISSUE_DEFAULTS.hvac,
-      }));
-      next();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create organization");
+    if (!biz.org_name.trim()) {
+      setError("Business name is required");
+      return;
     }
+    if (!biz.business_phone.trim()) {
+      setError("Business phone is required");
+      return;
+    }
+    if (!biz.notification_email.trim()) {
+      setError("Notification email is required");
+      return;
+    }
+    setAgent((a) => ({
+      ...a,
+      issue_taxonomy: ISSUE_DEFAULTS[biz.industry] || ISSUE_DEFAULTS.hvac,
+    }));
+    next();
   };
 
   const runCustomerImport = async (dryRun: boolean) => {
@@ -152,19 +162,46 @@ export default function OnboardingPage() {
     setDriveUrl(res.folder_url);
   };
 
-  const handleStep5 = async () => {
-    if (!orgId) return;
+  const handleComplete = async () => {
     setError(null);
+    setProvisioning(true);
     try {
-      await updateOrganizationSettings(orgId, {
+      const zipCodes = biz.service_zip_codes
+        .split(",")
+        .map((z) => z.trim())
+        .filter(Boolean);
+
+      const result = await provisionOnboarding({
+        business_name: biz.org_name.trim(),
+        trade_type: biz.industry,
+        phone_number: biz.business_phone.trim(),
+        agent_name: biz.agent_name.trim(),
+        timezone: biz.timezone,
+        business_hours: biz.business_hours,
+        notification_email: biz.notification_email.trim(),
+        service_zip_codes: zipCodes.length ? zipCodes : undefined,
+      });
+
+      setOrgId(result.org_id);
+      setOrgName(result.org_name);
+      setAgentName(result.agent_name);
+      setIndustry(biz.industry);
+
+      await updateOrganizationSettings(result.org_id, {
         system_prompt_override: agent.system_prompt_override || undefined,
         first_message: agent.first_message,
         issue_taxonomy: agent.issue_taxonomy.split(",").map((t) => t.trim()),
         pinecone_namespace: "faq_general",
       });
+
+      setProvisionComplete(true);
       next();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save agent settings");
+      setError(
+        e instanceof Error ? e.message : "Failed to provision organization",
+      );
+    } finally {
+      setProvisioning(false);
     }
   };
 
@@ -230,57 +267,89 @@ export default function OnboardingPage() {
               setBiz((b) => ({ ...b, business_phone: e.target.value }))
             }
           />
-          <select
+          <input
             className="w-full rounded border px-3 py-2 text-sm dark:bg-slate-800"
-            value={biz.plan_tier}
-            onChange={(e) => setBiz((b) => ({ ...b, plan_tier: e.target.value }))}
-          >
-            <option value="starter">starter</option>
-            <option value="professional">professional</option>
-            <option value="enterprise">enterprise</option>
-          </select>
+            placeholder="AI agent name (e.g. Alex)"
+            value={biz.agent_name}
+            onChange={(e) =>
+              setBiz((b) => ({ ...b, agent_name: e.target.value }))
+            }
+          />
+          <input
+            className="w-full rounded border px-3 py-2 text-sm dark:bg-slate-800"
+            placeholder="Notification email"
+            type="email"
+            value={biz.notification_email}
+            onChange={(e) =>
+              setBiz((b) => ({ ...b, notification_email: e.target.value }))
+            }
+          />
+          <input
+            className="w-full rounded border px-3 py-2 text-sm dark:bg-slate-800"
+            placeholder="Service ZIP codes (optional, comma-separated)"
+            value={biz.service_zip_codes}
+            onChange={(e) =>
+              setBiz((b) => ({ ...b, service_zip_codes: e.target.value }))
+            }
+          />
           <button
             type="button"
-            onClick={() => void handleStep1()}
+            onClick={handleStep1}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white"
           >
-            Create organization & continue
+            Continue
           </button>
         </div>
       )}
 
-      {step === 1 && orgId && (
+      {step === 1 && (
         <ImportStep
           title="Import customers"
+          note={
+            orgId
+              ? undefined
+              : "Complete setup on the final step to enable imports, or skip for now."
+          }
           file={customerFile}
           setFile={setCustomerFile}
           preview={customerPreview}
           onDryRun={() => void runCustomerImport(true)}
           onImport={() => void runCustomerImport(false)}
-          onDownload={() => void getImportTemplate(orgId, "customers")}
+          onDownload={() => orgId && void getImportTemplate(orgId, "customers")}
           onSkip={next}
+          disabled={!orgId}
         />
       )}
 
-      {step === 2 && orgId && (
+      {step === 2 && (
         <ImportStep
           title="Import equipment"
-          note="Links equipment to customers by phone or email."
+          note={
+            orgId
+              ? "Links equipment to customers by phone or email."
+              : "Complete setup on the final step to enable imports, or skip for now."
+          }
           file={equipmentFile}
           setFile={setEquipmentFile}
           preview={equipmentPreview}
           onDryRun={() => void runEquipmentImport(true)}
           onImport={() => void runEquipmentImport(false)}
-          onDownload={() => void getImportTemplate(orgId, "equipment")}
+          onDownload={() => orgId && void getImportTemplate(orgId, "equipment")}
           onSkip={next}
+          disabled={!orgId}
         />
       )}
 
-      {step === 3 && orgId && (
+      {step === 3 && (
         <div className="max-w-lg space-y-4">
-          <p className="text-sm text-gray-600">Upload PDF, Word, or text files.</p>
+          <p className="text-sm text-gray-600">
+            {orgId
+              ? "Upload PDF, Word, or text files."
+              : "Complete setup on the final step to upload documents, or skip for now."}
+          </p>
           <input
             type="file"
+            disabled={!orgId}
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) void handleDocUpload(f);
@@ -289,8 +358,9 @@ export default function OnboardingPage() {
           <p className="text-sm">Documents indexed: {docsIndexed}</p>
           <button
             type="button"
+            disabled={!orgId}
             onClick={() => void handleDriveSetup()}
-            className="rounded border px-4 py-2 text-sm"
+            className="rounded border px-4 py-2 text-sm disabled:opacity-50"
           >
             Set up Google Drive folder
           </button>
@@ -305,7 +375,7 @@ export default function OnboardingPage() {
         </div>
       )}
 
-      {step === 4 && orgId && (
+      {step === 4 && (
         <div className="max-w-lg space-y-3">
           <textarea
             className="w-full rounded border px-3 py-2 text-sm dark:bg-slate-800"
@@ -330,35 +400,40 @@ export default function OnboardingPage() {
           />
           <button
             type="button"
-            onClick={() => void handleStep5()}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white"
+            onClick={() => void handleComplete()}
+            disabled={provisioning}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white disabled:opacity-60"
           >
-            Save & continue
+            {provisioning ? "Setting up your AI receptionist…" : "Complete setup"}
           </button>
         </div>
       )}
 
-      {step === 5 && (
-        <div className="max-w-lg space-y-3 text-sm">
-          <p>✅ Organization created: {orgName}</p>
-          <p>✅ {customersImported} customers imported</p>
-          <p>✅ {equipmentImported} equipment records imported</p>
-          <p>✅ {docsIndexed} documents indexed</p>
-          <p>✅ Agent configured ({industry} taxonomy)</p>
-          <div className="mt-4 flex gap-2">
-            <Link
-              href="/dashboard"
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-white"
-            >
-              Go to Dashboard
-            </Link>
-            <Link
-              href="/dashboard/admin"
-              className="rounded-lg border px-4 py-2"
-            >
-              View Organization
-            </Link>
-          </div>
+      {step === 5 && provisionComplete && (
+        <div className="max-w-lg space-y-4">
+          <h2 className="text-xl font-semibold text-green-700 dark:text-green-300">
+            Your AI receptionist is ready!
+          </h2>
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            <span className="font-medium">{orgName}</span> is live with agent{" "}
+            <span className="font-medium">{agentName}</span>.
+          </p>
+          {customersImported > 0 && (
+            <p className="text-sm">✅ {customersImported} customers imported</p>
+          )}
+          {equipmentImported > 0 && (
+            <p className="text-sm">✅ {equipmentImported} equipment records imported</p>
+          )}
+          {docsIndexed > 0 && (
+            <p className="text-sm">✅ {docsIndexed} documents indexed</p>
+          )}
+          <button
+            type="button"
+            onClick={() => router.push("/dashboard")}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white"
+          >
+            Go to Dashboard
+          </button>
           <div className="mt-6 rounded border p-4 dark:border-slate-700">
             <p className="font-medium">Vapi setup — add these 12 tools:</p>
             <ul className="mt-2 list-inside list-disc text-xs">
@@ -392,6 +467,7 @@ function ImportStep({
   onImport,
   onDownload,
   onSkip,
+  disabled = false,
 }: {
   title: string;
   note?: string;
@@ -402,23 +478,30 @@ function ImportStep({
   onImport: () => void;
   onDownload: () => void;
   onSkip: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="max-w-lg space-y-3">
       <h2 className="text-lg font-semibold">{title}</h2>
       {note && <p className="text-sm text-gray-600">{note}</p>}
-      <button type="button" onClick={onDownload} className="text-sm text-indigo-600 underline">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onDownload}
+        className="text-sm text-indigo-600 underline disabled:opacity-50"
+      >
         Download template
       </button>
       <input
         type="file"
         accept=".csv"
+        disabled={disabled}
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
       />
       <div className="flex gap-2">
         <button
           type="button"
-          disabled={!file}
+          disabled={!file || disabled}
           onClick={onDryRun}
           className="rounded border px-3 py-1 text-sm disabled:opacity-50"
         >
@@ -426,7 +509,7 @@ function ImportStep({
         </button>
         <button
           type="button"
-          disabled={!file}
+          disabled={!file || disabled}
           onClick={onImport}
           className="rounded bg-indigo-600 px-3 py-1 text-sm text-white disabled:opacity-50"
         >
