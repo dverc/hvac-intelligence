@@ -53,6 +53,38 @@ class DispatchService:
         settings = OrganizationSettings.model_validate(org.settings or {})
         return settings.timezone
 
+    async def _resolve_preferred_window(
+        self,
+        preferred_window: str,
+        org_id: uuid.UUID,
+        technician_id: uuid.UUID,
+        tz_name: str | None = None,
+    ) -> ParsedWindow:
+        """Parse preferred_window; fall back to first open slot when time is unknown."""
+        if tz_name is None:
+            tz_name = await self._get_org_timezone(org_id)
+        parsed = parse_preferred_window(preferred_window, tz_name)
+        if parsed.times_resolved:
+            return parsed
+
+        slots = await self.availability.get_available_slots(
+            org_id,
+            parsed.slot_date,
+            parsed.slot_date,
+            duration_minutes=120,
+            preferred_technician_id=technician_id,
+        )
+        if not slots:
+            return parsed
+
+        slot = slots[0]
+        return ParsedWindow(
+            slot_date=slot.date,
+            start_time=slot.start_time,
+            end_time=slot.end_time,
+            times_resolved=True,
+        )
+
     async def _select_technician(
         self, customer: Customer, org_id: uuid.UUID
     ) -> Technician:
@@ -114,7 +146,18 @@ class DispatchService:
         else:
             technician = await self._select_technician(customer, org_id)
         tz_name = await self._get_org_timezone(org_id)
-        parsed: ParsedWindow = parse_preferred_window(preferred_window, tz_name)
+        parsed = await self._resolve_preferred_window(
+            preferred_window, org_id, technician.technician_id, tz_name
+        )
+        if not parsed.times_resolved:
+            return {
+                "success": False,
+                "error": "no_availability",
+                "message": (
+                    f"No open slots found for {preferred_window}. "
+                    "Call check_availability to find open times."
+                ),
+            }
 
         available, reason = await self.availability.check_slot_available(
             org_id,
@@ -241,7 +284,15 @@ class DispatchService:
             changes.append("booking cancelled")
 
         if args.preferred_window:
-            parsed = parse_preferred_window(args.preferred_window, tz_name)
+            if job.technician_id:
+                parsed = await self._resolve_preferred_window(
+                    args.preferred_window,
+                    org_id,
+                    job.technician_id,
+                    tz_name,
+                )
+            else:
+                parsed = parse_preferred_window(args.preferred_window, tz_name)
             if job.technician_id:
                 available, reason = await self.availability.check_slot_available(
                     org_id,

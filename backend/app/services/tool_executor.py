@@ -280,7 +280,6 @@ class ToolExecutor:
 
             if customer is not None and customer.org_id == self.org_id:
                 tz_name = await self.dispatch_service._get_org_timezone(self.org_id)
-                parsed_window = parse_preferred_window(parsed.preferred_window, tz_name)
                 named_tech = await _find_named_technician_from_window(
                     self.dispatch_service.db,
                     self.org_id,
@@ -288,6 +287,14 @@ class ToolExecutor:
                 )
                 technician = None
                 if named_tech is not None:
+                    parsed_window = (
+                        await self.dispatch_service._resolve_preferred_window(
+                            parsed.preferred_window,
+                            self.org_id,
+                            named_tech.technician_id,
+                            tz_name,
+                        )
+                    )
                     available, _ = (
                         await self.dispatch_service.availability.check_slot_available(
                             self.org_id,
@@ -302,6 +309,14 @@ class ToolExecutor:
                 if technician is None:
                     technician = await self.dispatch_service._select_technician(
                         customer, self.org_id
+                    )
+                    parsed_window = (
+                        await self.dispatch_service._resolve_preferred_window(
+                            parsed.preferred_window,
+                            self.org_id,
+                            technician.technician_id,
+                            tz_name,
+                        )
                     )
                 create_kwargs["preferred_technician_id"] = technician.technician_id
                 lock_key = build_slot_lock_key(
@@ -382,15 +397,19 @@ class ToolExecutor:
                         send_appointment_reminder_24h,
                     )
 
-                    tz_name = (
-                        await self.dispatch_service._get_org_timezone(self.org_id)
-                        if self.org_id is not None
-                        else "America/Los_Angeles"
-                    )
-                    parsed_window = parse_preferred_window(
-                        parsed.preferred_window, tz_name
-                    )
-                    scheduled_window_start, _ = parsed_window.to_datetimes(tz_name)
+                    scheduled_window_start = job.scheduled_window_start
+                    if scheduled_window_start is None:
+                        tz_name = (
+                            await self.dispatch_service._get_org_timezone(self.org_id)
+                            if self.org_id is not None
+                            else "America/Los_Angeles"
+                        )
+                        parsed_window = parse_preferred_window(
+                            parsed.preferred_window, tz_name
+                        )
+                        scheduled_window_start, _ = parsed_window.to_datetimes(
+                            tz_name
+                        )
                     now = datetime.now(timezone.utc)
                     if scheduled_window_start.tzinfo is None:
                         scheduled_window_start = scheduled_window_start.replace(
