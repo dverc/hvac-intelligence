@@ -432,11 +432,15 @@ class ToolExecutor:
             parsed.num_days_to_check,
             tz_name,
         )
-        preferred_tech = (
-            uuid.UUID(parsed.preferred_technician_id)
-            if parsed.preferred_technician_id
-            else None
-        )
+        preferred_tech = None
+        if parsed.preferred_technician_id:
+            try:
+                preferred_tech = uuid.UUID(parsed.preferred_technician_id)
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid preferred_technician_id %r — expected UUID",
+                    parsed.preferred_technician_id,
+                )
         issue_type = kwargs.get("issue_type")
         required_skill = (
             get_required_skill(str(issue_type)) if issue_type is not None else None

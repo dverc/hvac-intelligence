@@ -291,10 +291,6 @@ Check real technician availability before confirming a booking. Call this before
           "type": "integer",
           "description": "Expected job duration in minutes. Default 60."
         },
-        "preferred_technician_id": {
-          "type": "string",
-          "description": "Optional UUID to check a specific technician only."
-        },
         "num_days_to_check": {
           "type": "integer",
           "description": "How many days ahead to search (1-7). Default 3."
