@@ -6,12 +6,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 
 from app.api.deps import get_analytics_service, get_customer_service
+from app.core.auth_jwt import get_current_user
 from app.core.tenant import get_dashboard_org_id
+from app.ml.counterfactuals import generate_counterfactuals
+from app.ml.explainer import build_shap_explanation
+from app.ml.feature_engineering import build_customer_features
+from app.ml.ground_truth import record_churn_event
+from app.ml.model_registry import get_churn_ensemble, load_model
 from app.models.call_transcript import CallTranscript
 from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
 from app.schemas.analytics import ChurnTimelineResponse
 from app.schemas.customer import CustomerUpdate
+from app.schemas.ml_explanations import (
+    ChurnOutcomeRequest,
+    ChurnOutcomeResponse,
+    CounterfactualResponse,
+    ShapExplanationResponse,
+)
 from app.schemas.transcript import (
     CustomerTranscriptsResponse,
     transcript_to_summary,
@@ -147,3 +159,91 @@ async def get_customer_churn_timeline(
         return await analytics.get_churn_timeline(org_id, customer_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{customer_id}/shap-explanation",
+    response_model=ShapExplanationResponse,
+)
+async def get_customer_shap_explanation(
+    customer_id: uuid.UUID,
+    customer_service: CustomerService = Depends(get_customer_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    _user: dict = Depends(get_current_user),
+) -> ShapExplanationResponse:
+    customer = await customer_service.get_by_id(customer_id, org_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    features = await build_customer_features(customer_id, customer_service.db)
+    ensemble = get_churn_ensemble()
+    model = ensemble.calibrated_model or load_model()
+    payload = build_shap_explanation(str(customer_id), features, model)
+    return ShapExplanationResponse.model_validate(payload)
+
+
+@router.get(
+    "/{customer_id}/counterfactuals",
+    response_model=CounterfactualResponse,
+)
+async def get_customer_counterfactuals(
+    customer_id: uuid.UUID,
+    customer_service: CustomerService = Depends(get_customer_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    _user: dict = Depends(get_current_user),
+) -> CounterfactualResponse:
+    customer = await customer_service.get_by_id(customer_id, org_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    features = await build_customer_features(customer_id, customer_service.db)
+    ensemble = get_churn_ensemble()
+    model = ensemble.calibrated_model or load_model()
+    from app.ml.churn_model import default_rule_score, predict_probability
+
+    current_score = (
+        predict_probability(features, model)
+        if model is not None
+        else default_rule_score(features)
+    )
+    payload = await generate_counterfactuals(
+        customer_id,
+        customer_service.db,
+        model,
+        current_features=features,
+        current_score=current_score,
+    )
+    return CounterfactualResponse.model_validate(payload)
+
+
+@router.post(
+    "/{customer_id}/churn-outcome",
+    response_model=ChurnOutcomeResponse,
+)
+async def post_customer_churn_outcome(
+    customer_id: uuid.UUID,
+    body: ChurnOutcomeRequest,
+    customer_service: CustomerService = Depends(get_customer_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    _user: dict = Depends(get_current_user),
+) -> ChurnOutcomeResponse:
+    customer = await customer_service.get_by_id(customer_id, org_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    try:
+        label = await record_churn_event(
+            customer_id,
+            body.churned,
+            customer_service.db,
+            notes=body.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ChurnOutcomeResponse(
+        customer_id=str(customer_id),
+        churned=body.churned,
+        label_id=str(label.label_id),
+        churn_probability_at_time=float(label.churn_probability_at_time),
+    )

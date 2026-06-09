@@ -4,9 +4,11 @@ import type {
   ChurnScoresListResponse,
   ChurnTimelineResponse,
   CohortHeatmapResponse,
+  CounterfactualResponse,
   FeatureImportanceResponse,
   RetentionEventsResponse,
   SavedByAIResponse,
+  ShapExplanationResponse,
 } from "@/types/churn";
 import type {
   CustomerListResponse,
@@ -30,6 +32,17 @@ function apiKeyHeaders(): Record<string, string> {
     return {};
   }
   return { "X-API-Key": key };
+}
+
+function authenticatedHeaders(): Record<string, string> {
+  const headers = { ...apiKeyHeaders() };
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("hvac_token");
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return headers;
 }
 
 export class ApiError extends Error {
@@ -249,6 +262,32 @@ export type {
 export function getCustomerChurnTimeline(customerId: string) {
   return apiGet<ChurnTimelineResponse>(
     `/api/v1/customers/${customerId}/churn-timeline`,
+  );
+}
+
+async function apiGetAuthenticated<T>(path: string): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    cache: "no-store",
+    headers: { Accept: "application/json", ...authenticatedHeaders() },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, `GET ${path} failed: ${body}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export function getCustomerShapExplanation(customerId: string) {
+  return apiGetAuthenticated<ShapExplanationResponse>(
+    `/api/v1/customers/${customerId}/shap-explanation`,
+  );
+}
+
+export function getCustomerCounterfactuals(customerId: string) {
+  return apiGetAuthenticated<CounterfactualResponse>(
+    `/api/v1/customers/${customerId}/counterfactuals`,
   );
 }
 

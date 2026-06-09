@@ -6,6 +6,7 @@ from app.models.dispatch_job import DispatchJob
 from app.models.document_registry import DocumentRegistry
 from app.models.equipment import Equipment
 from app.models.feature_store import FeatureStore
+from app.models.ground_truth_label import GroundTruthLabel
 from app.models.google_calendar_token import GoogleCalendarToken
 from app.models.jobber_token import JobberToken
 from app.models.organization import Organization
@@ -25,6 +26,7 @@ __all__ = [
     "DocumentRegistry",
     "Equipment",
     "FeatureStore",
+    "GroundTruthLabel",
     "GoogleCalendarToken",
     "JobberToken",
     "Organization",

@@ -4,7 +4,9 @@ import { notFound } from "next/navigation";
 
 import { CallHistorySection } from "@/components/CallHistorySection";
 import { ChurnTimelineChart } from "@/components/ChurnTimelineChart";
+import { CounterfactualInterventionsSection } from "@/components/CounterfactualInterventionsSection";
 import { RiskBadge } from "@/components/RiskBadge";
+import { ShapWaterfallSection } from "@/components/ShapWaterfallSection";
 import {
   getCustomer,
   getCustomerChurnTimeline,
@@ -98,6 +100,10 @@ export default async function CustomerDetailPage({ params }: Props) {
           />
         </div>
       </Card>
+
+      <ShapWaterfallSection customerId={params.id} />
+
+      <CounterfactualInterventionsSection customerId={params.id} />
 
       <Card>
         <Text>Feature Contributions</Text>

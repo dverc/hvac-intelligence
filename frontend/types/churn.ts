@@ -13,6 +13,40 @@ export interface FeatureContribution {
   direction: "INCREASES_RISK" | "DECREASES_RISK";
 }
 
+export interface ShapFeatureExplanation {
+  feature: string;
+  friendly_name: string;
+  value: number;
+  shap_value: number;
+  direction: "INCREASES_RISK" | "DECREASES_RISK";
+  explanation: string;
+}
+
+export interface ShapExplanationResponse {
+  customer_id: string;
+  churn_probability: number;
+  baseline_probability: number;
+  features: ShapFeatureExplanation[];
+  top_risk_factors: string[];
+  top_protective_factors: string[];
+}
+
+export interface CounterfactualIntervention {
+  feature: string;
+  friendly_name: string;
+  current_value: number;
+  suggested_value: number;
+  suggested_action: string;
+  estimated_score_reduction: number;
+}
+
+export interface CounterfactualResponse {
+  customer_id: string;
+  current_score: number;
+  target_score: number;
+  interventions: CounterfactualIntervention[];
+}
+
 export interface ChurnScore {
   churn_probability: number;
   risk_tier: RiskTier;
