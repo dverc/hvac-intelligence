@@ -1,18 +1,17 @@
+from unittest.mock import patch
+
 import pytest
 
 from app.ml.churn_model import ChurnModelEnsemble
 from app.ml.churn_schema import FEATURE_ORDER
+from app.ml.feature_engineering import ML_FEATURE_ORDER
 
 
-def test_missing_artifacts_graceful(monkeypatch, tmp_path):
-    monkeypatch.setenv("MODEL_ARTIFACTS_PATH", str(tmp_path))
-    from app.core.config import get_settings
-    from app.core.database import get_engine
-
-    get_settings.cache_clear()
-    get_engine.cache_clear()
-    model = ChurnModelEnsemble()
-    result = model.predict({key: 0.0 for key in FEATURE_ORDER})
+def test_missing_artifacts_graceful():
+    """Simulate missing model artifacts regardless of files on disk."""
+    with patch("app.ml.churn_model.load_model", return_value=None):
+        model = ChurnModelEnsemble()
+        result = model.predict({key: 0.0 for key in ML_FEATURE_ORDER})
 
     assert result["status"] == "model_not_trained"
     assert result["churn_probability"] is None
