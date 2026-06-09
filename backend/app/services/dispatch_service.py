@@ -91,6 +91,7 @@ class DispatchService:
         equipment_id: Optional[str] = None,
         access_instructions: Optional[str] = None,
         churn_context: Optional[dict[str, Any]] = None,
+        preferred_technician_id: Optional[uuid.UUID] = None,
     ) -> dict[str, Any]:
         cid = uuid.UUID(customer_id)
         customer = await self.db.get(
@@ -100,7 +101,18 @@ class DispatchService:
             raise ValueError(f"Customer {customer_id} not found")
 
         applied_priority, retention_flag = _apply_retention_priority(priority, churn_context)
-        technician = await self._select_technician(customer, org_id)
+        if preferred_technician_id is not None:
+            tech = await self.db.get(Technician, preferred_technician_id)
+            if (
+                tech
+                and tech.org_id == org_id
+                and tech.employment_status == "ACTIVE"
+            ):
+                technician = tech
+            else:
+                technician = await self._select_technician(customer, org_id)
+        else:
+            technician = await self._select_technician(customer, org_id)
         tz_name = await self._get_org_timezone(org_id)
         parsed: ParsedWindow = parse_preferred_window(preferred_window, tz_name)
 

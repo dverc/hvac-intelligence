@@ -337,6 +337,19 @@ async def handle_vapi_webhook(
                             f"{system_prompt}"
                         )
 
+                system_prompt = (
+                    "TOOL RULES - CRITICAL:\n"
+                    "- create_support_ticket: You MUST collect customer_id, ticket_type, "
+                    "subject, description, and priority BEFORE calling this tool. Never call "
+                    "create_support_ticket with empty arguments. If you do not have all "
+                    "fields, ask the customer for the missing information first.\n"
+                    "- schedule_dispatch: After calling check_availability, use the "
+                    "technician name from the availability results. Do not include "
+                    "technician names in preferred_window — pass only the date and time "
+                    "window.\n\n"
+                    f"{system_prompt}"
+                )
+
                 assistant_overrides: dict[str, Any] = {
                     "variableValues": variable_values,
                     "model": {

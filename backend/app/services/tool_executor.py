@@ -61,6 +61,30 @@ from app.services.window_parser import parse_date_range
 
 logger = logging.getLogger(__name__)
 
+async def _find_named_technician_from_window(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    preferred_window: str,
+) -> Any | None:
+    """Match a word in preferred_window to an active technician's first name."""
+    from sqlalchemy import select
+
+    from app.models.technician import Technician
+
+    stmt = select(Technician).where(
+        Technician.org_id == org_id,
+        Technician.employment_status == "ACTIVE",
+    )
+    techs = list((await db.execute(stmt)).scalars())
+    for word in preferred_window.split():
+        word_lower = word.lower()
+        for tech in techs:
+            first_name = tech.full_name.split()[0].lower()
+            if word_lower == first_name:
+                return tech
+    return None
+
+
 TOOL_REGISTRY: dict[str, str] = {
     "schedule_dispatch": "execute_schedule_dispatch",
     "query_churn_score": "execute_query_churn_score",
@@ -255,11 +279,31 @@ class ToolExecutor:
             )
 
             if customer is not None and customer.org_id == self.org_id:
-                technician = await self.dispatch_service._select_technician(
-                    customer, self.org_id
-                )
                 tz_name = await self.dispatch_service._get_org_timezone(self.org_id)
                 parsed_window = parse_preferred_window(parsed.preferred_window, tz_name)
+                named_tech = await _find_named_technician_from_window(
+                    self.dispatch_service.db,
+                    self.org_id,
+                    parsed.preferred_window,
+                )
+                technician = None
+                if named_tech is not None:
+                    available, _ = (
+                        await self.dispatch_service.availability.check_slot_available(
+                            self.org_id,
+                            named_tech.technician_id,
+                            parsed_window.slot_date,
+                            parsed_window.start_time,
+                            parsed_window.end_time,
+                        )
+                    )
+                    if available:
+                        technician = named_tech
+                if technician is None:
+                    technician = await self.dispatch_service._select_technician(
+                        customer, self.org_id
+                    )
+                create_kwargs["preferred_technician_id"] = technician.technician_id
                 lock_key = build_slot_lock_key(
                     self.org_id,
                     technician.technician_id,

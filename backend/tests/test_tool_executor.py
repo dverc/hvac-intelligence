@@ -1,8 +1,11 @@
 import json
 import uuid
+from datetime import date, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
 
 from app.models.dispatch_job import DispatchJob
@@ -13,6 +16,53 @@ from app.services.customer_service import CustomerService
 from app.services.dispatch_service import DispatchService
 from app.services.ticket_service import TicketService
 from app.services.tool_executor import ToolExecutor
+
+
+@pytest_asyncio.fixture
+async def marcus_and_elena_technicians(db_session):
+    """Marcus (highest rating) and Elena for preferred-window name routing tests."""
+    from app.core.constants import SEED_ORG_ID
+    from app.models.technician import Technician
+    from app.models.technician_schedule import TechnicianSchedule
+
+    marcus = Technician(
+        org_id=SEED_ORG_ID,
+        employee_number=f"T-MARCUS-{uuid.uuid4().hex[:8]}",
+        full_name="Marcus Thompson",
+        phone="+15551234001",
+        hire_date=date(2016, 4, 12),
+        tenure_years=Decimal("9"),
+        avg_customer_rating=Decimal("4.82"),
+        skills=["hvac"],
+    )
+    elena = Technician(
+        org_id=SEED_ORG_ID,
+        employee_number=f"T-ELENA-{uuid.uuid4().hex[:8]}",
+        full_name="Elena Vasquez",
+        phone="+15551234002",
+        hire_date=date(2021, 9, 1),
+        tenure_years=Decimal("4"),
+        avg_customer_rating=Decimal("4.65"),
+        skills=["hvac"],
+    )
+    db_session.add_all([marcus, elena])
+    await db_session.flush()
+
+    for tech in (marcus, elena):
+        for dow in range(5):
+            db_session.add(
+                TechnicianSchedule(
+                    org_id=SEED_ORG_ID,
+                    technician_id=tech.technician_id,
+                    day_of_week=dow,
+                    start_time=datetime.strptime("08:00", "%H:%M").time(),
+                    end_time=datetime.strptime("17:00", "%H:%M").time(),
+                    is_active=True,
+                    effective_from=date.today(),
+                )
+            )
+    await db_session.flush()
+    return {"marcus": marcus, "elena": elena}
 
 
 @pytest.fixture
@@ -69,6 +119,65 @@ async def test_execute_batch_parses_stringified_function_arguments(
     results = await tool_executor.execute_batch(tool_call_list)
     payload = json.loads(results[0]["result"])
     assert payload["risk_tier"] == "HIGH"
+
+
+@pytest.mark.asyncio
+async def test_schedule_dispatch_picks_elena_when_name_in_preferred_window(
+    tool_executor, seeded_customer, marcus_and_elena_technicians, db_session
+):
+    elena = marcus_and_elena_technicians["elena"]
+    result = json.loads(
+        await tool_executor.execute_schedule_dispatch(
+            customer_id=seeded_customer["customer_id"],
+            issue_type="AC_FAILURE",
+            priority="P2",
+            preferred_window="Tomorrow Monday June 8 10 AM to 12 PM with Elena",
+            issue_description="Unit not cooling",
+        )
+    )
+    assert result.get("success") is True, result
+    assert result["technician"]["name"].startswith("Elena")
+
+    job = await db_session.get(DispatchJob, uuid.UUID(result["job_id"]))
+    assert job.technician_id == elena.technician_id
+
+
+@pytest.mark.asyncio
+async def test_schedule_dispatch_falls_back_when_named_technician_unavailable(
+    tool_executor, seeded_customer, marcus_and_elena_technicians, db_session
+):
+    elena = marcus_and_elena_technicians["elena"]
+    marcus = marcus_and_elena_technicians["marcus"]
+    window = "monday morning with Elena"
+    customer_id = seeded_customer["customer_id"]
+
+    first = json.loads(
+        await tool_executor.execute_schedule_dispatch(
+            customer_id=customer_id,
+            issue_type="AC_FAILURE",
+            priority="P2",
+            preferred_window=window,
+            issue_description="First booking for Elena",
+        )
+    )
+    assert first.get("success") is True, first
+    assert first["technician"]["name"].startswith("Elena")
+
+    second = json.loads(
+        await tool_executor.execute_schedule_dispatch(
+            customer_id=customer_id,
+            issue_type="AC_FAILURE",
+            priority="P2",
+            preferred_window=window,
+            issue_description="Fallback booking",
+        )
+    )
+    assert second.get("success") is True, second
+    assert second["technician"]["name"].startswith("Marcus")
+
+    job = await db_session.get(DispatchJob, uuid.UUID(second["job_id"]))
+    assert job.technician_id == marcus.technician_id
+    assert job.technician_id != elena.technician_id
 
 
 @pytest.mark.asyncio
