@@ -311,6 +311,14 @@ async def handle_vapi_webhook(
                             )
 
                 system_prompt = enrichment["system_prompt_injection"]
+                if phone:
+                    system_prompt = system_prompt.replace("{{caller_phone}}", phone)
+                    system_prompt = (
+                        f"FIRST ACTION: The caller's phone number is {phone}. "
+                        "Start by calling get_customer_info with lookup_method='phone' "
+                        f"and lookup_value='{phone}' immediately.\n\n"
+                        f"{system_prompt}"
+                    )
                 if customer is not None:
                     tier_prefix = _customer_tier_system_prompt_prefix(customer.customer_tier)
                     if tier_prefix:

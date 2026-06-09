@@ -465,7 +465,19 @@ class AvailabilityService:
         from app.models.customer import Customer
 
         stmt = (
-            select(DispatchJob, Customer, Technician)
+            select(
+                DispatchJob.job_id,
+                DispatchJob.job_number,
+                DispatchJob.job_status,
+                DispatchJob.priority,
+                DispatchJob.issue_type,
+                DispatchJob.scheduled_window_start,
+                DispatchJob.scheduled_window_end,
+                DispatchJob.technician_id,
+                DispatchJob.customer_id,
+                Customer.full_name.label("customer_name"),
+                Technician.full_name.label("technician_name"),
+            )
             .join(Customer, DispatchJob.customer_id == Customer.customer_id)
             .outerjoin(Technician, DispatchJob.technician_id == Technician.technician_id)
             .where(
@@ -485,21 +497,20 @@ class AvailabilityService:
         rows = (await self.db.execute(stmt)).all()
 
         items: list[dict] = []
-        for job, customer, tech in rows:
+        for row in rows:
             items.append(
                 {
-                    "job_id": str(job.job_id),
-                    "job_number": job.job_number,
-                    "customer_id": str(customer.customer_id),
-                    "customer_name": customer.full_name,
-                    "issue_type": job.issue_type,
-                    "issue_description": job.issue_description,
-                    "technician_id": str(job.technician_id) if job.technician_id else None,
-                    "technician_name": tech.full_name if tech else None,
-                    "priority": job.priority,
-                    "job_status": job.job_status,
-                    "scheduled_window_start": job.scheduled_window_start,
-                    "scheduled_window_end": job.scheduled_window_end,
+                    "job_id": str(row.job_id),
+                    "job_number": row.job_number,
+                    "customer_id": str(row.customer_id),
+                    "customer_name": row.customer_name,
+                    "issue_type": row.issue_type,
+                    "technician_id": str(row.technician_id) if row.technician_id else None,
+                    "technician_name": row.technician_name,
+                    "priority": row.priority,
+                    "job_status": row.job_status,
+                    "scheduled_window_start": row.scheduled_window_start,
+                    "scheduled_window_end": row.scheduled_window_end,
                 }
             )
         return items
