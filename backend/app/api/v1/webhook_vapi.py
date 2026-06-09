@@ -365,7 +365,14 @@ async def handle_vapi_webhook(
                     "\"I apologize for the mix-up. I've noted your preference for "
                     "[technician name] and our team will ensure [technician name] is "
                     "assigned when they call to confirm your appointment.\" Then end the "
-                    "call gracefully.\n\n"
+                    "call gracefully.\n"
+                    "- schedule_dispatch: If schedule_dispatch returns an error 3 or more "
+                    "times in a row for the same time slot, STOP trying that slot. Tell "
+                    "the customer: 'I'm having trouble booking that slot right now. Let me "
+                    "create a callback request so our team can confirm your appointment.' "
+                    "Then call create_support_ticket with ticket_type='MANAGER_CALLBACK' "
+                    "and a clear description of the desired booking details. Do NOT confirm "
+                    "a booking that was not successfully created.\n\n"
                     f"{system_prompt}"
                 )
 

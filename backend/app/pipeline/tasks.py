@@ -24,7 +24,7 @@ from app.models.organization import Organization
 from app.models.technician import Technician
 from app.pipeline.celery_app import celery_app
 from app.core.metrics import saved_by_ai_counter
-from app.services.sms_service import build_booking_confirmation_sms, send_sms
+from app.services.sms_service import SmsService, send_sms
 from app.services.email_service import build_weekly_report_html, send_email
 from app.pipeline.event_bus import (
     publish_batch_score_complete_sync,
@@ -609,34 +609,11 @@ def send_booking_confirmation_sms(self, job_id: str) -> dict[str, Any]:
             if tech is not None:
                 technician_name = tech.full_name
 
-        address_parts = [
-            part
-            for part in (
-                customer.address_line1,
-                customer.city,
-                customer.state,
-                customer.zip,
-            )
-            if part
-        ]
-        address = ", ".join(address_parts) if address_parts else "your service address"
-
-        if job.scheduled_window_start and job.scheduled_window_end:
-            scheduled_window = (
-                f"{job.scheduled_window_start.strftime('%a %b %d, %I:%M %p')}–"
-                f"{job.scheduled_window_end.strftime('%I:%M %p')}"
-            )
-        else:
-            scheduled_window = "your scheduled window"
-
-        message = build_booking_confirmation_sms(
-            customer_name=customer.full_name,
+        sent = SmsService().send_booking_confirmation(
+            job,
+            customer,
             technician_name=technician_name,
-            scheduled_window=scheduled_window,
-            address=address,
-            issue_type=job.issue_type or "service",
         )
-        sent = send_sms(customer.phone_primary, message)
         if sent:
             logger.info("Booking confirmation SMS sent for job %s", job_id)
             return {"status": "ok", "job_id": job_id}
@@ -647,33 +624,6 @@ def send_booking_confirmation_sms(self, job_id: str) -> dict[str, Any]:
         raise
     finally:
         session.close()
-
-
-def _customer_address(customer: Customer) -> str:
-    parts = [
-        part
-        for part in (
-            customer.address_line1,
-            customer.city,
-            customer.state,
-            customer.zip,
-        )
-        if part
-    ]
-    return ", ".join(parts) if parts else "your service address"
-
-
-def _format_job_window(job: DispatchJob) -> str:
-    if job.scheduled_window_start and job.scheduled_window_end:
-        return (
-            f"{job.scheduled_window_start.strftime('%a %b %d, %I:%M %p')}–"
-            f"{job.scheduled_window_end.strftime('%I:%M %p')}"
-        )
-    return "your scheduled window"
-
-
-def _issue_type_label(issue_type: str | None) -> str:
-    return (issue_type or "service").replace("_", " ").lower()
 
 
 def _hours_until_appointment(window_start: datetime, now: datetime) -> float:
@@ -741,14 +691,11 @@ def send_appointment_reminder_24h(self, job_id: str) -> dict[str, Any]:
             if tech is not None:
                 technician_name = tech.full_name
 
-        first_name = customer.full_name.split()[0] if customer.full_name.strip() else "there"
-        message = (
-            f"Hi {first_name}, reminder: your {_issue_type_label(job.issue_type)} "
-            f"appointment is tomorrow. {technician_name} will arrive at "
-            f"{_customer_address(customer)} during {_format_job_window(job)}. "
-            "Reply STOP to opt out."
+        sent = SmsService().send_24h_reminder(
+            job,
+            customer,
+            technician_name=technician_name,
         )
-        sent = send_sms(customer.phone_primary, message)
         if not sent:
             logger.warning("24h appointment reminder SMS not sent for job %s", job_id)
             return {"status": "skipped", "job_id": job_id}
@@ -817,13 +764,11 @@ def send_appointment_reminder_1h(self, job_id: str) -> dict[str, Any]:
             if tech is not None:
                 technician_name = tech.full_name
 
-        first_name = customer.full_name.split()[0] if customer.full_name.strip() else "there"
-        message = (
-            f"Hi {first_name}, your technician {technician_name} is on the way! "
-            f"Expected arrival at {_customer_address(customer)} within "
-            f"{_format_job_window(job)}. Reply STOP to opt out."
+        sent = SmsService().send_1h_reminder(
+            job,
+            customer,
+            technician_name=technician_name,
         )
-        sent = send_sms(customer.phone_primary, message)
         if not sent:
             logger.warning("1h appointment reminder SMS not sent for job %s", job_id)
             return {"status": "skipped", "job_id": job_id}

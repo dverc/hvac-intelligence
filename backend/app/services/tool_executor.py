@@ -340,12 +340,38 @@ class ToolExecutor:
             job_id = result.get("job_id")
             if job_id:
                 try:
-                    from app.pipeline.tasks import send_booking_confirmation_sms
+                    from app.models.dispatch_job import DispatchJob
+                    from app.services.sms_service import SmsService
 
-                    send_booking_confirmation_sms.delay(str(job_id))
+                    job = await self.db.get(
+                        DispatchJob,
+                        uuid.UUID(str(job_id)),
+                        options=[
+                            selectinload(DispatchJob.customer),
+                            selectinload(DispatchJob.technician),
+                        ],
+                    )
+                    if job is not None and job.customer is not None:
+                        tz_name = (
+                            await self.dispatch_service._get_org_timezone(self.org_id)
+                            if self.org_id is not None
+                            else "America/Los_Angeles"
+                        )
+                        tech_name = (
+                            job.technician.full_name
+                            if job.technician is not None
+                            else "our technician"
+                        )
+                        await asyncio.to_thread(
+                            SmsService().send_booking_confirmation,
+                            job,
+                            job.customer,
+                            technician_name=tech_name,
+                            timezone_name=tz_name,
+                        )
                 except Exception:
                     logger.exception(
-                        "Failed to enqueue booking confirmation SMS for job %s",
+                        "Failed to send booking confirmation SMS for job %s",
                         job_id,
                     )
                 try:

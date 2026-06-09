@@ -29,13 +29,15 @@ def _parse_hhmm(value: str) -> time:
 def _time_ranges_overlap(
     start_a: time, end_a: time, start_b: time, end_b: time
 ) -> bool:
-    return start_a < end_b and start_b < end_a
+    """True when [start_a, end_a) overlaps [start_b, end_b) — adjacent slots do not overlap."""
+    return start_a < end_b and end_a > start_b
 
 
 def _datetime_ranges_overlap(
     start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime
 ) -> bool:
-    return start_a < end_b and start_b < end_a
+    """True when [start_a, end_a) overlaps [start_b, end_b) — adjacent slots do not overlap."""
+    return start_a < end_b and end_a > start_b
 
 
 class AvailabilityService:
@@ -119,7 +121,7 @@ class AvailabilityService:
         technician_id: uuid.UUID,
         target_date: date,
         tz_name: str,
-    ) -> list[tuple[time, time]]:
+    ) -> list[tuple[datetime, datetime]]:
         tz = ZoneInfo(tz_name)
         day_start = datetime.combine(target_date, time.min, tzinfo=tz)
         day_end = day_start + timedelta(days=1)
@@ -138,13 +140,16 @@ class AvailabilityService:
             )
         ).scalars().all()
 
-        blocks: list[tuple[time, time]] = []
+        blocks: list[tuple[datetime, datetime]] = []
         for job in rows:
             assert job.scheduled_window_start is not None
             assert job.scheduled_window_end is not None
             start_local = job.scheduled_window_start.astimezone(tz)
             end_local = job.scheduled_window_end.astimezone(tz)
-            blocks.append((start_local.time(), end_local.time()))
+            block_start = max(start_local, day_start)
+            block_end = min(end_local, day_end)
+            if block_start < block_end:
+                blocks.append((block_start, block_end))
         return blocks
 
     def _generate_slots_for_day(
@@ -152,26 +157,28 @@ class AvailabilityService:
         target_date: date,
         work_start: time,
         work_end: time,
-        busy_blocks: list[tuple[time, time]],
+        busy_blocks: list[tuple[datetime, datetime]],
         technician: Technician,
         duration_minutes: int,
         tz_name: str,
         slot_increment_minutes: int = 120,
     ) -> list[AvailableSlot]:
+        tz = ZoneInfo(tz_name)
         slots: list[AvailableSlot] = []
-        cursor = datetime.combine(target_date, work_start)
-        work_end_dt = datetime.combine(target_date, work_end)
+        cursor = datetime.combine(target_date, work_start, tzinfo=tz)
+        work_end_dt = datetime.combine(target_date, work_end, tzinfo=tz)
         increment = timedelta(minutes=slot_increment_minutes)
         duration = timedelta(minutes=duration_minutes)
 
         while cursor + duration <= work_end_dt:
             slot_start = cursor.time()
-            slot_end = (cursor + increment).time()
-            if slot_end <= slot_start:
+            slot_end_dt = cursor + increment
+            slot_end = slot_end_dt.time()
+            if slot_end <= slot_start and slot_end_dt.date() > target_date:
                 break
 
             blocked = any(
-                _time_ranges_overlap(slot_start, slot_end, busy[0], busy[1])
+                _datetime_ranges_overlap(cursor, slot_end_dt, busy[0], busy[1])
                 for busy in busy_blocks
             )
             if not blocked:
@@ -259,9 +266,14 @@ class AvailabilityService:
             )
 
         tz_name = await self._get_org_timezone(org_id)
+        tz = ZoneInfo(tz_name)
+        requested_start = datetime.combine(slot_date, start_time, tzinfo=tz)
+        requested_end = datetime.combine(slot_date, end_time, tzinfo=tz)
         busy = await self._get_busy_blocks(org_id, technician_id, slot_date, tz_name)
         for busy_start, busy_end in busy:
-            if _time_ranges_overlap(start_time, end_time, busy_start, busy_end):
+            if _datetime_ranges_overlap(
+                requested_start, requested_end, busy_start, busy_end
+            ):
                 return False, (
                     f"{tech.full_name} already has a booking overlapping "
                     f"{start_time.strftime('%H:%M')}–{end_time.strftime('%H:%M')}."

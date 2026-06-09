@@ -81,7 +81,7 @@ def test_send_appointment_reminder_24h_sends_sms(database_ready):
     )
 
     try:
-        with patch("app.pipeline.tasks.send_sms", return_value=True) as mock_send:
+        with patch("app.services.sms_service.send_sms", return_value=True) as mock_send:
             result = send_appointment_reminder_24h.run(str(job.job_id))
 
         assert result["status"] == "ok"
@@ -107,7 +107,7 @@ def test_send_appointment_reminder_24h_skips_outside_window(database_ready):
     )
 
     try:
-        with patch("app.pipeline.tasks.send_sms", return_value=True) as mock_send:
+        with patch("app.services.sms_service.send_sms", return_value=True) as mock_send:
             result = send_appointment_reminder_24h.run(str(job.job_id))
 
         assert result["status"] == "skipped"
@@ -127,13 +127,13 @@ def test_send_appointment_reminder_1h_sends_sms(database_ready):
     )
 
     try:
-        with patch("app.pipeline.tasks.send_sms", return_value=True) as mock_send:
+        with patch("app.services.sms_service.send_sms", return_value=True) as mock_send:
             result = send_appointment_reminder_1h.run(str(job.job_id))
 
         assert result["status"] == "ok"
         mock_send.assert_called_once()
         message = mock_send.call_args[0][1]
-        assert "on the way" in message.lower()
+        assert "on their way" in message.lower()
         assert "Reply STOP" in message
 
         session.refresh(job)
@@ -152,7 +152,7 @@ def test_reminder_not_sent_when_twilio_unconfigured(database_ready):
     )
 
     try:
-        with patch("app.pipeline.tasks.send_sms", return_value=False) as mock_send:
+        with patch("app.services.sms_service.send_sms", return_value=False) as mock_send:
             result = send_appointment_reminder_24h.run(str(job.job_id))
 
         assert result["status"] == "skipped"
