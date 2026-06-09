@@ -16,10 +16,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
-def create_access_token(data: dict) -> str:
+def create_access_token(data: dict, *, expires_minutes: int | None = None) -> str:
     settings = get_settings()
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    lifetime = (
+        expires_minutes if expires_minutes is not None else ACCESS_TOKEN_EXPIRE_MINUTES
+    )
+    expire = datetime.now(timezone.utc) + timedelta(minutes=lifetime)
     to_encode["exp"] = expire
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=ALGORITHM)
 

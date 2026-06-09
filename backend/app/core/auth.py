@@ -26,6 +26,8 @@ async def verify_dashboard_api_key(request: Request) -> None:
         "/api/v1/auth/login",
         "/api/v1/auth/logout",
         "/api/v1/auth/me",
+        "/api/v1/auth/forgot-password",
+        "/api/v1/auth/reset-password",
     }:
         return
     await verify_api_key(request)
