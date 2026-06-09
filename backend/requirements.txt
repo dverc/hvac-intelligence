@@ -30,6 +30,7 @@ scikit-learn==1.5.0
 pandas==2.2.2
 numpy==1.26.4
 shap==0.45.1
+joblib==1.4.2
 # torch + transformers: installed separately in CI (ci.yml) and Docker (Dockerfile)
 pytest==8.2.1
 pytest-asyncio==0.23.7

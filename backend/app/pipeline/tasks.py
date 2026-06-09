@@ -12,6 +12,7 @@ from sqlalchemy import func, or_, select, text
 from app.ml.churn_schema import FEATURE_ORDER
 from app.ml.feature_builder import FeatureBuilder
 from app.ml.model_registry import get_churn_ensemble
+from app.pipeline.churn_scorer import score_customer_sync
 from app.ml.sync_db import get_sync_session
 from app.models.call_transcript import CallTranscript
 from app.models.churn_score import ChurnScore
@@ -87,17 +88,25 @@ def process_call_features(self, feature_payload: dict[str, Any]) -> dict[str, An
         session.commit()
 
         ensemble = get_churn_ensemble()
-        prediction = ensemble.predict(model_input)
+        scoring = score_customer_sync(
+            session,
+            uuid.UUID(str(customer_id)),
+            trigger="CALL_COMPLETED",
+            ensemble=ensemble,
+        )
 
-        if prediction.get("status") == "model_not_trained":
-            logger.info("Skipping churn_scores persist — model not trained")
+        if scoring.get("status") == "error":
+            logger.warning(
+                "Churn scoring failed for customer %s: %s",
+                customer_id,
+                scoring.get("reason"),
+            )
             session.commit()
-            return {"status": "features_stored", "scoring": prediction}
+            return {"status": "features_stored", "scoring": scoring}
 
         score_before = feature_payload.get("churn_risk_at_call_start")
-        score_after = prediction.get("churn_probability")
+        score_after = scoring.get("churn_probability")
 
-        _persist_churn_score(session, meta, prediction, trigger="CALL_COMPLETED")
         _update_call_transcript_scores(
             session,
             call_id=feature_payload.get("call_id"),
@@ -117,8 +126,8 @@ def process_call_features(self, feature_payload: dict[str, Any]) -> dict[str, An
         return {
             "status": "ok",
             "customer_id": str(customer_id),
-            "churn_probability": prediction.get("churn_probability"),
-            "risk_tier": prediction.get("risk_tier"),
+            "churn_probability": scoring.get("churn_probability"),
+            "risk_tier": scoring.get("risk_tier"),
         }
     except Exception as exc:
         session.rollback()
@@ -336,17 +345,33 @@ def batch_rescore_customers(self) -> dict[str, Any]:
         builder = FeatureBuilder(session)
         ensemble = get_churn_ensemble()
         scored = 0
+        errors = 0
 
         for customer_id in customer_ids:
-            full_features = builder.build(entity_id=customer_id, entity_type="CUSTOMER")
-            meta = full_features.pop("_meta", {})
-            model_input = FeatureBuilder.model_feature_dict(full_features)
-            _upsert_feature_store(session, meta, full_features, model_input)
+            try:
+                full_features = builder.build(
+                    entity_id=customer_id, entity_type="CUSTOMER"
+                )
+                meta = full_features.pop("_meta", {})
+                model_input = FeatureBuilder.model_feature_dict(full_features)
+                _upsert_feature_store(session, meta, full_features, model_input)
+            except Exception as exc:
+                logger.warning(
+                    "Feature store upsert failed for customer %s: %s",
+                    customer_id,
+                    exc,
+                )
 
-            prediction = ensemble.predict(model_input)
-            if prediction.get("status") != "model_not_trained":
-                _persist_churn_score(session, meta, prediction, trigger="BATCH_RESCORE")
+            result = score_customer_sync(
+                session,
+                customer_id,
+                trigger="BATCH_RESCORE",
+                ensemble=ensemble,
+            )
+            if result.get("status") in {"ok", "model_not_trained"}:
                 scored += 1
+            elif result.get("status") == "error":
+                errors += 1
 
         session.commit()
         critical_after = _count_tier(session, "CRITICAL")
@@ -360,6 +385,7 @@ def batch_rescore_customers(self) -> dict[str, Any]:
         return {
             "status": "ok",
             "accounts_scored": scored,
+            "scoring_errors": errors,
             "new_critical": max(0, critical_after - critical_before),
             "resolved_critical": max(0, critical_before - critical_after),
         }
