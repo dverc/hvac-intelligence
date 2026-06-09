@@ -197,7 +197,27 @@ class MockToolExecutor:
 
     def __init__(self) -> None:
         self.customer_service = MagicMock()
+        self.customer_service.get_call_context = AsyncMock(
+            return_value={
+                "variable_values": {
+                    "customer_name": "Test Customer",
+                    "equipment_info": "Carrier AC",
+                    "churn_risk": "LOW",
+                    "retention_protocol": "",
+                    "company_name": "HVAC Intelligence Demo",
+                },
+                "system_prompt_injection": "Test system prompt",
+                "first_message": None,
+            }
+        )
+        self.customer_service.lookup_by_phone = AsyncMock(return_value=None)
         self.churn_service = MagicMock()
+        self.churn_service.get_latest_score = AsyncMock(
+            return_value={
+                "risk_tier": "LOW",
+                "churn_probability": 0.2,
+            }
+        )
         self.calls: list[tuple[str, dict]] = []
         # Tenant context attributes mirrored from the real ToolExecutor.
         self.org_id = None
@@ -658,13 +678,40 @@ def seeded_sync_customer(sync_db_session):
     }
 
 
+@pytest.fixture
+def dashboard_api_key() -> str:
+    """Signing key for dashboard API and OAuth state (matches service settings)."""
+    return get_settings().DASHBOARD_API_KEY
+
+
+async def _create_admin_user(db_session: AsyncSession) -> tuple[str, str]:
+    """Insert an admin user and return (email, password)."""
+    from passlib.context import CryptContext
+
+    from app.core.constants import SEED_ORG_ID_STR
+    from app.models.user import User
+
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    email = f"admin-{uuid.uuid4().hex[:8]}@test.local"
+    password = "TestAdminPass123!"
+    user = User(
+        org_id=SEED_ORG_ID_STR,
+        email=email,
+        hashed_password=pwd_context.hash(password),
+        role="admin",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    return email, password
+
+
 @pytest_asyncio.fixture
 async def api_client(
     db_session: AsyncSession,
     mock_tool_executor: MockToolExecutor,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[AsyncClient, None]:
-    """httpx AsyncClient against FastAPI app with dependency overrides."""
+    """httpx AsyncClient with X-API-Key (for register and unauthenticated auth tests)."""
     from app.api import deps
     from app.main import app
     from app.pipeline import event_bus
@@ -684,8 +731,42 @@ async def api_client(
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-API-Key": "test-api-key-for-tests"},
+        headers={"X-API-Key": get_settings().DASHBOARD_API_KEY},
     ) as client:
         yield client
 
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def auth_client(
+    db_session: AsyncSession,
+    api_client: AsyncClient,
+) -> AsyncGenerator[AsyncClient, None]:
+    """Authenticated client: JWT Bearer + X-API-Key for protected dashboard routes."""
+    from app.core.rate_limit import limiter
+
+    settings = get_settings()
+    email, password = await _create_admin_user(db_session)
+
+    transport = api_client._transport
+    limiter.enabled = False
+    try:
+        login_resp = await api_client.post(
+            "/api/v1/auth/login",
+            data={"username": email, "password": password},
+        )
+    finally:
+        limiter.enabled = True
+    assert login_resp.status_code == 200, login_resp.text
+    token = login_resp.json()["access_token"]
+
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={
+            "X-API-Key": settings.DASHBOARD_API_KEY,
+            "Authorization": f"Bearer {token}",
+        },
+    ) as client:
+        yield client

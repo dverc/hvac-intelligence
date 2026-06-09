@@ -12,19 +12,19 @@ from app.models.google_calendar_token import GoogleCalendarToken
 
 
 @pytest.mark.asyncio
-async def test_google_connect_returns_authorization_url(api_client):
+async def test_google_connect_returns_authorization_url(auth_client):
     with patch(
         "app.services.google_calendar_service.GoogleCalendarService.get_oauth_url",
         return_value="https://accounts.google.com/o/oauth2/auth?client_id=test",
     ):
-        response = await api_client.get("/api/v1/integrations/google/connect")
+        response = await auth_client.get("/api/v1/integrations/google/connect")
     assert response.status_code == 200
     assert "accounts.google.com" in response.json()["authorization_url"]
 
 
 @pytest.mark.asyncio
-async def test_google_status_not_connected(api_client):
-    response = await api_client.get("/api/v1/integrations/google/status")
+async def test_google_status_not_connected(auth_client):
+    response = await auth_client.get("/api/v1/integrations/google/status")
     assert response.status_code == 200
     body = response.json()
     assert body["connected"] is False
@@ -57,7 +57,7 @@ async def test_google_oauth_callback_no_api_key_redirects(api_client):
 
 
 @pytest.mark.asyncio
-async def test_google_sync_returns_count(api_client, db_session, encryption_key):
+async def test_google_sync_returns_count(auth_client, db_session, encryption_key):
     from cryptography.fernet import Fernet
 
     key = Fernet.generate_key().decode()
@@ -74,7 +74,7 @@ async def test_google_sync_returns_count(api_client, db_session, encryption_key)
         new_callable=AsyncMock,
         return_value=3,
     ):
-        response = await api_client.post(
+        response = await auth_client.post(
             "/api/v1/integrations/google/sync",
             json={
                 "technician_id": str(tech_id),

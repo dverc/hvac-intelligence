@@ -11,19 +11,19 @@ from app.models.jobber_token import JobberToken
 
 
 @pytest.mark.asyncio
-async def test_jobber_connect_returns_authorization_url(api_client):
+async def test_jobber_connect_returns_authorization_url(auth_client):
     with patch(
         "app.services.jobber_service.JobberService.get_oauth_url",
         return_value="https://api.getjobber.com/api/oauth/authorize?client_id=test",
     ):
-        response = await api_client.get("/api/v1/integrations/jobber/connect")
+        response = await auth_client.get("/api/v1/integrations/jobber/connect")
     assert response.status_code == 200
     assert "getjobber.com" in response.json()["authorization_url"]
 
 
 @pytest.mark.asyncio
-async def test_jobber_status_not_connected(api_client):
-    response = await api_client.get("/api/v1/integrations/jobber/status")
+async def test_jobber_status_not_connected(auth_client):
+    response = await auth_client.get("/api/v1/integrations/jobber/status")
     assert response.status_code == 200
     body = response.json()
     assert body["connected"] is False
@@ -54,7 +54,7 @@ async def test_jobber_oauth_callback_no_api_key_redirects(api_client):
 
 
 @pytest.mark.asyncio
-async def test_jobber_sync_returns_counts(api_client):
+async def test_jobber_sync_returns_counts(auth_client):
     with (
         patch(
             "app.services.jobber_service.JobberService.sync_clients_to_customers",
@@ -76,7 +76,7 @@ async def test_jobber_sync_returns_counts(api_client):
             new_callable=AsyncMock,
         ),
     ):
-        response = await api_client.post(
+        response = await auth_client.post(
             "/api/v1/integrations/jobber/sync",
             json={"sync_type": "all", "days_ahead": 7},
         )

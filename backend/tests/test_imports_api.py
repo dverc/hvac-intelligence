@@ -10,12 +10,12 @@ from app.core.constants import SEED_ORG_ID_STR
 
 
 @pytest.mark.asyncio
-async def test_import_customers_valid_csv(api_client):
+async def test_import_customers_valid_csv(auth_client):
     csv_body = (
         "full_name,phone,email\n"
         "API Import,+19497770001,apiimport@example.com\n"
     ).encode("utf-8")
-    response = await api_client.post(
+    response = await auth_client.post(
         f"/api/v1/imports/{SEED_ORG_ID_STR}/customers",
         files={"file": ("customers.csv", io.BytesIO(csv_body), "text/csv")},
         data={"dry_run": "false"},
@@ -26,9 +26,9 @@ async def test_import_customers_valid_csv(api_client):
 
 
 @pytest.mark.asyncio
-async def test_import_customers_dry_run(api_client):
+async def test_import_customers_dry_run(auth_client):
     csv_body = b"full_name,phone,email\nTest User,+19497770002,t2@example.com\n"
-    response = await api_client.post(
+    response = await auth_client.post(
         f"/api/v1/imports/{SEED_ORG_ID_STR}/customers",
         files={"file": ("customers.csv", io.BytesIO(csv_body), "text/csv")},
         data={"dry_run": "true"},
@@ -38,8 +38,8 @@ async def test_import_customers_dry_run(api_client):
 
 
 @pytest.mark.asyncio
-async def test_download_customer_template(api_client):
-    response = await api_client.get(
+async def test_download_customer_template(auth_client):
+    response = await auth_client.get(
         f"/api/v1/imports/{SEED_ORG_ID_STR}/templates/customers"
     )
     assert response.status_code == 200
@@ -48,13 +48,13 @@ async def test_download_customer_template(api_client):
 
 
 @pytest.mark.asyncio
-async def test_drive_sync_returns_counts(api_client):
+async def test_drive_sync_returns_counts(auth_client):
     with patch(
         "app.services.google_drive_service.GoogleDriveService.sync_folder_to_knowledge_base",
         new_callable=AsyncMock,
     ) as mock_sync:
         mock_sync.return_value = {"synced": 2, "skipped": 1, "errors": 0}
-        response = await api_client.post(
+        response = await auth_client.post(
             f"/api/v1/imports/{SEED_ORG_ID_STR}/drive/sync"
         )
     assert response.status_code == 200

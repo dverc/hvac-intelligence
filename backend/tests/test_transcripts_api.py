@@ -12,7 +12,7 @@ from app.models.call_transcript import CallTranscript
 
 @pytest.mark.asyncio
 async def test_get_customer_transcripts_returns_full_fields(
-    api_client,
+    auth_client,
     seeded_customer,
     db_session,
 ):
@@ -33,7 +33,7 @@ async def test_get_customer_transcripts_returns_full_fields(
     transcript.tool_calls_log = [{"name": "schedule_dispatch", "result": "ok"}]
     await db_session.flush()
 
-    response = await api_client.get(
+    response = await auth_client.get(
         f"/api/v1/customers/{seeded_customer['customer_id']}/transcripts"
     )
 
@@ -63,7 +63,7 @@ async def test_get_customer_transcripts_returns_full_fields(
 
 @pytest.mark.asyncio
 async def test_get_call_detail_returns_200(
-    api_client,
+    auth_client,
     seeded_customer,
     db_session,
 ):
@@ -80,7 +80,7 @@ async def test_get_call_detail_returns_200(
     transcript.call_summary = "Resolved FAQ"
     await db_session.flush()
 
-    response = await api_client.get("/api/v1/calls/call-seed-001")
+    response = await auth_client.get("/api/v1/calls/call-seed-001")
 
     assert response.status_code == 200
     body = response.json()
@@ -96,8 +96,8 @@ async def test_get_call_detail_returns_200(
 
 
 @pytest.mark.asyncio
-async def test_get_call_detail_returns_404_for_unknown_call_id(api_client):
-    response = await api_client.get("/api/v1/calls/nonexistent-call-id")
+async def test_get_call_detail_returns_404_for_unknown_call_id(auth_client):
+    response = await auth_client.get("/api/v1/calls/nonexistent-call-id")
 
     assert response.status_code == 404
     assert "nonexistent-call-id" in response.json()["detail"]

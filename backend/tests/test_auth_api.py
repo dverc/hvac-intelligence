@@ -1,13 +1,17 @@
-"""Tests for dashboard API key authentication."""
+"""Tests for dashboard API authentication."""
 
 from __future__ import annotations
-
-import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from tests.conftest import sign_vapi_payload
+
+_UNAUTHORIZED_DETAILS = {
+    "Invalid or missing API key",
+    "Not authenticated",
+    "Invalid or expired token",
+}
 
 
 @pytest.mark.asyncio
@@ -16,7 +20,7 @@ async def test_customers_without_api_key_returns_401(api_client):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/v1/customers")
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid or missing API key"
+    assert response.json()["detail"] in _UNAUTHORIZED_DETAILS
 
 
 @pytest.mark.asyncio
@@ -29,12 +33,12 @@ async def test_customers_with_wrong_api_key_returns_401(api_client):
     ) as client:
         response = await client.get("/api/v1/customers")
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid or missing API key"
+    assert response.json()["detail"] in _UNAUTHORIZED_DETAILS
 
 
 @pytest.mark.asyncio
-async def test_customers_with_correct_api_key_returns_200(api_client, seeded_customer):
-    response = await api_client.get("/api/v1/customers")
+async def test_customers_with_correct_api_key_returns_200(auth_client, seeded_customer):
+    response = await auth_client.get("/api/v1/customers")
     assert response.status_code == 200
     body = response.json()
     assert "items" in body

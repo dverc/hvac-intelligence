@@ -43,9 +43,9 @@ def _provision_payload(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_provision_creates_org_with_correct_fields(api_client, db_session):
+async def test_provision_creates_org_with_correct_fields(auth_client, db_session):
     payload = _provision_payload()
-    response = await api_client.post("/api/v1/onboarding/provision", json=payload)
+    response = await auth_client.post("/api/v1/onboarding/provision", json=payload)
     assert response.status_code == 201
     body = response.json()
 
@@ -68,21 +68,23 @@ async def test_provision_creates_org_with_correct_fields(api_client, db_session)
 
     assert body["org_name"] == payload["business_name"]
     assert body["agent_name"] == "Alex"
-    assert body["dashboard_api_key"] == "test-api-key-for-tests"
+    from app.core.config import get_settings
+
+    assert body["dashboard_api_key"] == get_settings().DASHBOARD_API_KEY
 
 
 @pytest.mark.asyncio
-async def test_provision_slug_generated_from_business_name(api_client):
+async def test_provision_slug_generated_from_business_name(auth_client):
     payload = _provision_payload(business_name="Summit Air Conditioning")
-    response = await api_client.post("/api/v1/onboarding/provision", json=payload)
+    response = await auth_client.post("/api/v1/onboarding/provision", json=payload)
     assert response.status_code == 201
     assert response.json()["slug"] == "summit-air-conditioning"
 
 
 @pytest.mark.asyncio
-async def test_provision_settings_contains_required_fields(api_client, db_session):
+async def test_provision_settings_contains_required_fields(auth_client, db_session):
     payload = _provision_payload(trade_type="plumbing")
-    response = await api_client.post("/api/v1/onboarding/provision", json=payload)
+    response = await auth_client.post("/api/v1/onboarding/provision", json=payload)
     assert response.status_code == 201
 
     org = await db_session.get(Organization, uuid.UUID(response.json()["org_id"]))
@@ -95,18 +97,18 @@ async def test_provision_settings_contains_required_fields(api_client, db_sessio
 
 
 @pytest.mark.asyncio
-async def test_provision_returns_400_when_business_name_missing(api_client):
+async def test_provision_returns_400_when_business_name_missing(auth_client):
     payload = _provision_payload()
     payload.pop("business_name")
-    response = await api_client.post("/api/v1/onboarding/provision", json=payload)
+    response = await auth_client.post("/api/v1/onboarding/provision", json=payload)
     assert response.status_code == 400
     assert "business_name" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
-async def test_provision_returns_400_when_phone_number_missing(api_client):
+async def test_provision_returns_400_when_phone_number_missing(auth_client):
     payload = _provision_payload()
     payload.pop("phone_number")
-    response = await api_client.post("/api/v1/onboarding/provision", json=payload)
+    response = await auth_client.post("/api/v1/onboarding/provision", json=payload)
     assert response.status_code == 400
     assert "phone_number" in response.json()["detail"]

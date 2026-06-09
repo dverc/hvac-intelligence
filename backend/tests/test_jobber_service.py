@@ -35,25 +35,28 @@ def encryption_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_oauth_url_returns_jobber_authorize_url(db_session, encryption_key):
+    from app.core.config import get_settings
+
+    settings = get_settings()
     svc = JobberService(db_session)
     url = svc.get_oauth_url(SEED_ORG_ID)
     assert "api.getjobber.com/api/oauth/authorize" in url
-    assert "client_id=test-jobber-client-id" in url
+    assert f"client_id={settings.JOBBER_CLIENT_ID}" in url
 
 
 @pytest.mark.asyncio
-async def test_oauth_state_signed_and_verifiable(encryption_key):
-    state = build_oauth_state(SEED_ORG_ID, None, "test-api-key-for-tests")
-    org_id, tech_id = verify_oauth_state(state, "test-api-key-for-tests")
+async def test_oauth_state_signed_and_verifiable(encryption_key, dashboard_api_key):
+    state = build_oauth_state(SEED_ORG_ID, None, dashboard_api_key)
+    org_id, tech_id = verify_oauth_state(state, dashboard_api_key)
     assert org_id == SEED_ORG_ID
     assert tech_id is None
 
 
 @pytest.mark.asyncio
 async def test_handle_oauth_callback_stores_encrypted_tokens(
-    db_session, encryption_key, monkeypatch
+    db_session, encryption_key, monkeypatch, dashboard_api_key
 ):
-    state = build_oauth_state(SEED_ORG_ID, None, "test-api-key-for-tests")
+    state = build_oauth_state(SEED_ORG_ID, None, dashboard_api_key)
 
     async def mock_post(self, url, **kwargs):
         if "oauth/token" in url:
@@ -81,8 +84,8 @@ async def test_handle_oauth_callback_stores_encrypted_tokens(
 
 
 @pytest.mark.asyncio
-async def test_handle_oauth_callback_tampered_state_raises(db_session, encryption_key):
-    state = build_oauth_state(SEED_ORG_ID, None, "test-api-key-for-tests")
+async def test_handle_oauth_callback_tampered_state_raises(db_session, encryption_key, dashboard_api_key):
+    state = build_oauth_state(SEED_ORG_ID, None, dashboard_api_key)
     tampered = state[:-4] + "XXXX"
     svc = JobberService(db_session)
     with pytest.raises(ValueError):

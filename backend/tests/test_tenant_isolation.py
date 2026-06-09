@@ -103,7 +103,7 @@ async def test_transcripts_scoped_to_org_excludes_other_tenant(
 
 @pytest.mark.asyncio
 async def test_dashboard_cannot_fetch_other_tenant_customer(
-    api_client, db_session, make_org, make_customer
+    auth_client, db_session, make_org, make_customer
 ):
     from app.main import app
 
@@ -114,7 +114,7 @@ async def test_dashboard_cannot_fetch_other_tenant_customer(
     # Dashboard scoped to org A (override the stopgap dependency).
     app.dependency_overrides[get_dashboard_org_id] = lambda: org_a.org_id
     try:
-        resp_a = await api_client.get(f"/api/v1/customers/{cust_b.customer_id}")
+        resp_a = await auth_client.get(f"/api/v1/customers/{cust_b.customer_id}")
         assert resp_a.status_code == 404
     finally:
         app.dependency_overrides.pop(get_dashboard_org_id, None)
@@ -122,7 +122,7 @@ async def test_dashboard_cannot_fetch_other_tenant_customer(
     # Dashboard scoped to org B can fetch it.
     app.dependency_overrides[get_dashboard_org_id] = lambda: org_b.org_id
     try:
-        resp_b = await api_client.get(f"/api/v1/customers/{cust_b.customer_id}")
+        resp_b = await auth_client.get(f"/api/v1/customers/{cust_b.customer_id}")
         assert resp_b.status_code == 200
         assert resp_b.json()["full_name"] == "B Customer"
     finally:

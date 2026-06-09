@@ -84,7 +84,7 @@ async def test_log_action_records_org_action_resource_fields(db_session):
 
 @pytest.mark.asyncio
 async def test_audit_logs_endpoint_returns_200_with_correct_structure(
-    api_client,
+    auth_client,
     db_session,
 ):
     await log_action(
@@ -97,7 +97,7 @@ async def test_audit_logs_endpoint_returns_200_with_correct_structure(
         new_value={"name": "Test User"},
     )
 
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/audit/logs",
         params={"org_id": str(SEED_ORG_ID), "limit": 10, "offset": 0},
     )
@@ -129,7 +129,7 @@ async def test_audit_logs_endpoint_returns_200_with_correct_structure(
 
 
 @pytest.mark.asyncio
-async def test_audit_logs_endpoint_filters_by_resource_type(api_client, db_session):
+async def test_audit_logs_endpoint_filters_by_resource_type(auth_client, db_session):
     await log_action(
         db_session,
         str(SEED_ORG_ID),
@@ -149,7 +149,7 @@ async def test_audit_logs_endpoint_filters_by_resource_type(api_client, db_sessi
         new_value={"subject": "Leak"},
     )
 
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/audit/logs",
         params={
             "org_id": str(SEED_ORG_ID),

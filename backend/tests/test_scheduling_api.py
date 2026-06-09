@@ -7,7 +7,7 @@ from app.core.constants import SEED_ORG_ID, SEED_ORG_ID_STR
 
 
 @pytest.mark.asyncio
-async def test_scheduling_availability_returns_slots(api_client, db_session):
+async def test_scheduling_availability_returns_slots(auth_client, db_session):
     from app.models.technician import Technician
     from app.models.technician_schedule import TechnicianSchedule
 
@@ -36,7 +36,7 @@ async def test_scheduling_availability_returns_slots(api_client, db_session):
 
     start = date.today() + timedelta(days=1)
     end = start + timedelta(days=2)
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/scheduling/availability",
         params={
             "date_from": start.isoformat(),
@@ -50,7 +50,7 @@ async def test_scheduling_availability_returns_slots(api_client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_put_working_hours(api_client, db_session):
+async def test_put_working_hours(auth_client, db_session):
     from app.models.technician import Technician
 
     tech = Technician(
@@ -63,7 +63,7 @@ async def test_put_working_hours(api_client, db_session):
     db_session.add(tech)
     await db_session.commit()
 
-    response = await api_client.put(
+    response = await auth_client.put(
         f"/api/v1/scheduling/technicians/{tech.technician_id}/working-hours",
         json=[{"day_of_week": 0, "start_time": "09:00", "end_time": "16:00"}],
     )
@@ -72,7 +72,7 @@ async def test_put_working_hours(api_client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_post_override(api_client, db_session):
+async def test_post_override(auth_client, db_session):
     from app.models.technician import Technician
 
     tech = Technician(
@@ -86,7 +86,7 @@ async def test_post_override(api_client, db_session):
     await db_session.commit()
 
     override_date = (date.today() + timedelta(days=5)).isoformat()
-    response = await api_client.post(
+    response = await auth_client.post(
         f"/api/v1/scheduling/technicians/{tech.technician_id}/overrides",
         json={
             "override_date": override_date,
@@ -99,9 +99,9 @@ async def test_post_override(api_client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_scheduled_jobs(api_client, seeded_customer):
+async def test_get_scheduled_jobs(auth_client, seeded_customer):
     today = date.today().isoformat()
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/scheduling/jobs",
         params={"date_from": today, "date_to": today},
     )

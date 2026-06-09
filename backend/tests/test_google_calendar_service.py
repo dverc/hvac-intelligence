@@ -36,19 +36,19 @@ async def test_get_oauth_url_returns_google_auth_url(db_session, encryption_key)
 
 
 @pytest.mark.asyncio
-async def test_oauth_state_signed_and_verifiable(db_session, encryption_key):
+async def test_oauth_state_signed_and_verifiable(db_session, encryption_key, dashboard_api_key):
     tech_id = uuid.uuid4()
-    state = build_oauth_state(SEED_ORG_ID, tech_id, "test-api-key-for-tests")
-    org, tech = verify_oauth_state(state, "test-api-key-for-tests")
+    state = build_oauth_state(SEED_ORG_ID, tech_id, dashboard_api_key)
+    org, tech = verify_oauth_state(state, dashboard_api_key)
     assert org == SEED_ORG_ID
     assert tech == tech_id
 
 
 @pytest.mark.asyncio
 async def test_handle_oauth_callback_stores_encrypted_tokens(
-    db_session, encryption_key, monkeypatch
+    db_session, encryption_key, monkeypatch, dashboard_api_key
 ):
-    state = build_oauth_state(SEED_ORG_ID, None, "test-api-key-for-tests")
+    state = build_oauth_state(SEED_ORG_ID, None, dashboard_api_key)
     mock_creds = Credentials(
         token="access-xyz",
         refresh_token="refresh-xyz",
@@ -82,8 +82,8 @@ async def test_handle_oauth_callback_stores_encrypted_tokens(
 
 
 @pytest.mark.asyncio
-async def test_handle_oauth_callback_tampered_state_raises(db_session, encryption_key):
-    state = build_oauth_state(SEED_ORG_ID, None, "test-api-key-for-tests")
+async def test_handle_oauth_callback_tampered_state_raises(db_session, encryption_key, dashboard_api_key):
+    state = build_oauth_state(SEED_ORG_ID, None, dashboard_api_key)
     tampered = state[:-4] + "XXXX"
     svc = GoogleCalendarService(db_session)
     with pytest.raises(ValueError, match="signature|Invalid|mismatch"):
@@ -91,13 +91,13 @@ async def test_handle_oauth_callback_tampered_state_raises(db_session, encryptio
 
 
 @pytest.mark.asyncio
-async def test_handle_oauth_callback_expired_state_raises(db_session, encryption_key):
+async def test_handle_oauth_callback_expired_state_raises(db_session, encryption_key, dashboard_api_key):
     old_ts = int(time.time()) - 700
     state = build_oauth_state(
-        SEED_ORG_ID, None, "test-api-key-for-tests", timestamp=old_ts
+        SEED_ORG_ID, None, dashboard_api_key, timestamp=old_ts
     )
     with pytest.raises(OAuthStateError, match="expired"):
-        verify_oauth_state(state, "test-api-key-for-tests")
+        verify_oauth_state(state, dashboard_api_key)
 
 
 @pytest.mark.asyncio

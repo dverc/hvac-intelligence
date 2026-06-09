@@ -10,7 +10,7 @@ from app.models.dispatch_job import DispatchJob
 
 @pytest.mark.asyncio
 async def test_call_analytics_returns_200_with_correct_structure(
-    api_client,
+    auth_client,
     seeded_customer,
     db_session,
 ):
@@ -28,7 +28,7 @@ async def test_call_analytics_returns_200_with_correct_structure(
     transcript.dispatch_job_id = job.job_id
     await db_session.flush()
 
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/analytics/calls",
         params={"org_id": str(SEED_ORG_ID), "days": 30},
     )
@@ -54,9 +54,9 @@ async def test_call_analytics_returns_200_with_correct_structure(
 
 
 @pytest.mark.asyncio
-async def test_call_analytics_returns_zero_values_when_org_has_no_calls(api_client):
+async def test_call_analytics_returns_zero_values_when_org_has_no_calls(auth_client):
     empty_org_id = "00000000-0000-4000-8000-000000000099"
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/analytics/calls",
         params={"org_id": empty_org_id, "days": 7},
     )
@@ -76,9 +76,9 @@ async def test_call_analytics_returns_zero_values_when_org_has_no_calls(api_clie
 
 
 @pytest.mark.asyncio
-async def test_call_analytics_booking_rate_zero_when_no_calls(api_client):
+async def test_call_analytics_booking_rate_zero_when_no_calls(auth_client):
     empty_org_id = "00000000-0000-4000-8000-000000000099"
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/analytics/calls",
         params={"org_id": empty_org_id, "days": 30},
     )
@@ -88,8 +88,8 @@ async def test_call_analytics_booking_rate_zero_when_no_calls(api_client):
 
 
 @pytest.mark.asyncio
-async def test_call_analytics_calls_by_day_has_one_entry_per_day_in_range(api_client):
-    response = await api_client.get(
+async def test_call_analytics_calls_by_day_has_one_entry_per_day_in_range(auth_client):
+    response = await auth_client.get(
         "/api/v1/analytics/calls",
         params={"org_id": str(SEED_ORG_ID), "days": 14},
     )
@@ -103,8 +103,8 @@ async def test_call_analytics_calls_by_day_has_one_entry_per_day_in_range(api_cl
 
 
 @pytest.mark.asyncio
-async def test_call_analytics_calls_by_hour_always_has_24_entries(api_client):
-    response = await api_client.get(
+async def test_call_analytics_calls_by_hour_always_has_24_entries(auth_client):
+    response = await auth_client.get(
         "/api/v1/analytics/calls",
         params={"org_id": str(SEED_ORG_ID), "days": 30},
     )
@@ -118,7 +118,7 @@ async def test_call_analytics_calls_by_hour_always_has_24_entries(api_client):
 
 @pytest.mark.asyncio
 async def test_call_analytics_includes_revenue_impact_with_roi_multiplier(
-    api_client,
+    auth_client,
     seeded_customer,
     db_session,
 ):
@@ -137,7 +137,7 @@ async def test_call_analytics_includes_revenue_impact_with_roi_multiplier(
     transcript.call_cost_usd = 1.16
     await db_session.flush()
 
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/analytics/calls",
         params={"org_id": str(SEED_ORG_ID), "days": 30},
     )
@@ -156,7 +156,7 @@ async def test_call_analytics_includes_revenue_impact_with_roi_multiplier(
 
 @pytest.mark.asyncio
 async def test_call_analytics_calls_abandoned_counts_short_calls(
-    api_client,
+    auth_client,
     db_session,
     seeded_customer,
 ):
@@ -169,7 +169,7 @@ async def test_call_analytics_calls_abandoned_counts_short_calls(
     transcript.duration_seconds = 20
     await db_session.flush()
 
-    response = await api_client.get(
+    response = await auth_client.get(
         "/api/v1/analytics/calls",
         params={"org_id": str(SEED_ORG_ID), "days": 30},
     )

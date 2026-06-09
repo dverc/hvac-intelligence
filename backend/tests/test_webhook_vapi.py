@@ -19,8 +19,13 @@ async def test_valid_hmac_signature_passes(api_client):
 
 
 @pytest.mark.asyncio
-async def test_invalid_signature_returns_401(api_client):
-    payload = {"message": {"type": "call-start", "call": {"id": "c2"}}}
+async def test_invalid_signature_returns_401(api_client, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("VAPI_WEBHOOK_HMAC_BYPASS", "false")
+    get_settings.cache_clear()
+
+    payload = {"message": {"type": "status-update", "call": {"id": "c2"}}}
     body = json.dumps(payload).encode("utf-8")
     response = await api_client.post(
         "/webhook/vapi",

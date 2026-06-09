@@ -7,14 +7,51 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from httpx import AsyncClient
 from jose import jwt
+from passlib.context import CryptContext
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.auth_jwt import ALGORITHM, create_access_token
 from app.core.config import get_settings
 from app.core.constants import SEED_ORG_ID_STR
-from app.core.auth_jwt import ALGORITHM, create_access_token
+from app.models.user import User
 
 
 def _unique_email(prefix: str = "user") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}@example.com"
+
+
+async def _register_test_user(
+    api_client,
+    db_session: AsyncSession,
+    email: str,
+    password: str,
+    *,
+    role: str = "dispatcher",
+) -> None:
+    """Register via POST /auth/register (X-API-Key) or seed user if JWT blocks register."""
+    response = await api_client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": password,
+            "org_id": SEED_ORG_ID_STR,
+            "role": role,
+        },
+    )
+    if response.status_code == 201:
+        return
+
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    user = User(
+        org_id=SEED_ORG_ID_STR,
+        email=email,
+        hashed_password=pwd_context.hash(password),
+        role=role,
+    )
+    db_session.add(user)
+    await db_session.flush()
 
 
 @pytest.mark.asyncio
@@ -38,21 +75,12 @@ async def test_register_creates_user(api_client):
 
 
 @pytest.mark.asyncio
-async def test_login_returns_access_token(api_client):
+async def test_login_returns_access_token(api_client, db_session):
     email = _unique_email("login")
     password = "securepass123"
-    register = await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": password,
-            "org_id": SEED_ORG_ID_STR,
-        },
-    )
-    assert register.status_code == 201
+    await _register_test_user(api_client, db_session, email, password)
 
     transport = api_client._transport
-    from httpx import AsyncClient
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -70,18 +98,9 @@ async def test_login_returns_access_token(api_client):
 
 
 @pytest.mark.asyncio
-async def test_login_fails_with_wrong_password(api_client):
+async def test_login_fails_with_wrong_password(api_client, db_session):
     email = _unique_email("badpass")
-    await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": "correctpassword",
-            "org_id": SEED_ORG_ID_STR,
-        },
-    )
-
-    from httpx import AsyncClient
+    await _register_test_user(api_client, db_session, email, "correctpassword")
 
     transport = api_client._transport
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -94,20 +113,12 @@ async def test_login_fails_with_wrong_password(api_client):
 
 
 @pytest.mark.asyncio
-async def test_me_returns_user_profile_with_valid_token(api_client):
+async def test_me_returns_user_profile_with_valid_token(api_client, db_session):
     email = _unique_email("me")
     password = "securepass123"
-    await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": password,
-            "org_id": SEED_ORG_ID_STR,
-            "role": "read_only",
-        },
+    await _register_test_user(
+        api_client, db_session, email, password, role="read_only"
     )
-
-    from httpx import AsyncClient
 
     transport = api_client._transport
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -131,8 +142,6 @@ async def test_me_returns_user_profile_with_valid_token(api_client):
 
 @pytest.mark.asyncio
 async def test_me_returns_401_with_invalid_token(api_client):
-    from httpx import AsyncClient
-
     transport = api_client._transport
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
@@ -156,16 +165,9 @@ async def test_forgot_password_returns_200_for_unknown_email(api_client):
 
 
 @pytest.mark.asyncio
-async def test_forgot_password_returns_200_for_registered_email(api_client):
+async def test_forgot_password_returns_200_for_registered_email(api_client, db_session):
     email = _unique_email("forgot")
-    await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": "securepass123",
-            "org_id": SEED_ORG_ID_STR,
-        },
-    )
+    await _register_test_user(api_client, db_session, email, "securepass123")
 
     with patch("app.api.v1.auth.send_email", return_value=True) as mock_send:
         response = await api_client.post(
@@ -181,24 +183,15 @@ async def test_forgot_password_returns_200_for_registered_email(api_client):
 
 
 @pytest.mark.asyncio
-async def test_reset_password_succeeds_with_valid_token(api_client):
+async def test_reset_password_succeeds_with_valid_token(api_client, db_session):
     email = _unique_email("reset")
     password = "securepass123"
     new_password = "newsecurepass456"
-    await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": password,
-            "org_id": SEED_ORG_ID_STR,
-        },
-    )
+    await _register_test_user(api_client, db_session, email, password)
     token = create_access_token(
         {"sub": email, "type": "password_reset"},
         expires_minutes=60,
     )
-
-    from httpx import AsyncClient
 
     transport = api_client._transport
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -226,16 +219,9 @@ async def test_reset_password_fails_with_invalid_token(api_client):
 
 
 @pytest.mark.asyncio
-async def test_reset_password_fails_with_expired_token(api_client):
+async def test_reset_password_fails_with_expired_token(api_client, db_session):
     email = _unique_email("expired-reset")
-    await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": "securepass123",
-            "org_id": SEED_ORG_ID_STR,
-        },
-    )
+    await _register_test_user(api_client, db_session, email, "securepass123")
     settings = get_settings()
     expired_payload = {
         "sub": email,
@@ -253,8 +239,6 @@ async def test_reset_password_fails_with_expired_token(api_client):
 
 @pytest.mark.asyncio
 async def test_login_rate_limit_returns_429(api_client):
-    from httpx import AsyncClient
-
     transport = api_client._transport
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         responses = []
@@ -272,21 +256,12 @@ async def test_login_rate_limit_returns_429(api_client):
 
 
 @pytest.mark.asyncio
-async def test_login_locks_account_after_five_failed_attempts(api_client):
+async def test_login_locks_account_after_five_failed_attempts(api_client, db_session):
     from app.core.rate_limit import limiter
 
     email = _unique_email("lockout")
     password = "securepass123"
-    await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": password,
-            "org_id": SEED_ORG_ID_STR,
-        },
-    )
-
-    from httpx import AsyncClient
+    await _register_test_user(api_client, db_session, email, password)
 
     limiter.enabled = False
     try:
@@ -311,20 +286,11 @@ async def test_login_locks_account_after_five_failed_attempts(api_client):
 
 
 @pytest.mark.asyncio
-async def test_locked_account_returns_423(api_client):
+async def test_locked_account_returns_423(api_client, db_session):
     from app.core.rate_limit import limiter
 
     email = _unique_email("locked423")
-    await api_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": email,
-            "password": "securepass123",
-            "org_id": SEED_ORG_ID_STR,
-        },
-    )
-
-    from httpx import AsyncClient
+    await _register_test_user(api_client, db_session, email, "securepass123")
 
     limiter.enabled = False
     try:

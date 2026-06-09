@@ -30,9 +30,9 @@ async def test_customer_created_with_default_tier_standard(db_session):
 
 
 @pytest.mark.asyncio
-async def test_customer_tier_can_be_updated_to_vip_via_api(api_client, seeded_customer):
+async def test_customer_tier_can_be_updated_to_vip_via_api(auth_client, seeded_customer):
     customer_id = seeded_customer["customer_id"]
-    response = await api_client.patch(
+    response = await auth_client.patch(
         f"/api/v1/customers/{customer_id}",
         json={"customer_tier": "vip"},
     )
@@ -40,7 +40,7 @@ async def test_customer_tier_can_be_updated_to_vip_via_api(api_client, seeded_cu
     body = response.json()
     assert body["customer_tier"] == "vip"
 
-    profile = await api_client.get(f"/api/v1/customers/{customer_id}")
+    profile = await auth_client.get(f"/api/v1/customers/{customer_id}")
     assert profile.status_code == 200
     assert profile.json()["customer_tier"] == "vip"
 
