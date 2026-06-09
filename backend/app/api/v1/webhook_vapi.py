@@ -372,7 +372,11 @@ async def handle_vapi_webhook(
                     "create a callback request so our team can confirm your appointment.' "
                     "Then call create_support_ticket with ticket_type='MANAGER_CALLBACK' "
                     "and a clear description of the desired booking details. Do NOT confirm "
-                    "a booking that was not successfully created.\n\n"
+                    "a booking that was not successfully created.\n"
+                    "- When a customer asks whether they will receive an SMS or text "
+                    "confirmation: say 'Yes, you will receive a text confirmation shortly "
+                    "after this call ends.' Do not create a support ticket for this "
+                    "question.\n\n"
                     f"{system_prompt}"
                 )
 
