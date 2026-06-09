@@ -4,8 +4,17 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useEffect, useState } from "react";
 
+import {
+  AuthError,
+  AuthFieldLabel,
+  AuthHeader,
+  AuthInput,
+  AuthShell,
+  AuthSubmitButton,
+  CheckIcon,
+  EyeIcon,
+} from "@/components/AuthShell";
 import { resetPassword } from "@/lib/auth";
-import { getOrgName } from "@/lib/config";
 
 function ResetPasswordForm() {
   const router = useRouter();
@@ -14,18 +23,31 @@ function ResetPasswordForm() {
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [countdown, setCountdown] = useState(3);
 
   useEffect(() => {
     if (!success) {
       return;
     }
-    const timer = window.setTimeout(() => {
+
+    setCountdown(3);
+    const countdownTimer = window.setInterval(() => {
+      setCountdown((value) => (value > 0 ? value - 1 : 0));
+    }, 1000);
+
+    const redirectTimer = window.setTimeout(() => {
       router.replace("/login");
     }, 3000);
-    return () => window.clearTimeout(timer);
+
+    return () => {
+      window.clearInterval(countdownTimer);
+      window.clearTimeout(redirectTimer);
+    };
   }, [success, router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -59,104 +81,98 @@ function ResetPasswordForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--background)] px-4 py-12">
-      <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="mb-8 text-center">
-          <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-            {getOrgName()}
-          </p>
-          <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
-            Choose a new password
-          </p>
+    <AuthShell>
+      {success ? (
+        <div className="space-y-4 text-center">
+          <CheckIcon />
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900 dark:text-slate-100">
+              Password updated!
+            </h1>
+            <p className="mt-2 text-sm text-gray-500 dark:text-slate-400">
+              Redirecting to sign in{countdown > 0 ? ` in ${countdown}…` : "…"}
+            </p>
+          </div>
+          <Link
+            href="/login"
+            className="inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
+          >
+            Go to sign in now
+          </Link>
         </div>
+      ) : (
+        <>
+          <AuthHeader title="Set new password" subtitle="Choose a strong password for your account" />
 
-        {success ? (
-          <div className="space-y-4 text-center">
-            <p className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300">
-              Password updated
-            </p>
-            <p className="text-sm text-gray-500 dark:text-slate-400">
-              Redirecting to sign in…
-            </p>
+          <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4">
+            <div>
+              <AuthFieldLabel htmlFor="password">New password</AuthFieldLabel>
+              <div className="relative">
+                <AuthInput
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  required
+                  minLength={8}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="pr-10"
+                  placeholder="At least 8 characters"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  <EyeIcon open={showPassword} />
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <AuthFieldLabel htmlFor="confirmPassword">Confirm password</AuthFieldLabel>
+              <div className="relative">
+                <AuthInput
+                  id="confirmPassword"
+                  type={showConfirmPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  required
+                  minLength={8}
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  className="pr-10"
+                  placeholder="Re-enter your password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((value) => !value)}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200"
+                  aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                >
+                  <EyeIcon open={showConfirmPassword} />
+                </button>
+              </div>
+            </div>
+
+            <AuthSubmitButton loading={loading} label="Updating password">
+              Update password
+            </AuthSubmitButton>
+
+            {error && <AuthError message={error} />}
+          </form>
+
+          <p className="mt-6 text-center text-sm text-gray-500 dark:text-slate-400">
             <Link
               href="/login"
-              className="inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
+              className="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
             >
-              Go to sign in now
+              Back to sign in
             </Link>
-          </div>
-        ) : (
-          <form onSubmit={(event) => void handleSubmit(event)} className="space-y-5">
-            <div>
-              <label
-                htmlFor="password"
-                className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300"
-              >
-                New password
-              </label>
-              <input
-                id="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                minLength={8}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none ring-indigo-500 focus:border-indigo-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                placeholder="At least 8 characters"
-              />
-            </div>
-
-            <div>
-              <label
-                htmlFor="confirmPassword"
-                className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300"
-              >
-                Confirm password
-              </label>
-              <input
-                id="confirmPassword"
-                type="password"
-                autoComplete="new-password"
-                required
-                minLength={8}
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none ring-indigo-500 focus:border-indigo-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                placeholder="Re-enter your password"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {loading ? (
-                <span className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-              ) : (
-                "Update password"
-              )}
-            </button>
-
-            {error && (
-              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-                {error}
-              </p>
-            )}
-
-            <p className="text-center text-sm">
-              <Link
-                href="/login"
-                className="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
-              >
-                Back to sign in
-              </Link>
-            </p>
-          </form>
-        )}
-      </div>
-    </div>
+          </p>
+        </>
+      )}
+    </AuthShell>
   );
 }
 
@@ -164,7 +180,7 @@ export default function ResetPasswordPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-[var(--background)]">
+        <div className="flex min-h-screen items-center justify-center bg-slate-100 dark:bg-slate-950">
           <span className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
         </div>
       }
