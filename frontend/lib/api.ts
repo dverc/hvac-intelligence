@@ -8,6 +8,7 @@ import type {
   FeatureImportanceResponse,
   RetentionEventsResponse,
   SavedByAIResponse,
+  ModelHealthResponse,
   ShapExplanationResponse,
 } from "@/types/churn";
 import type {
@@ -289,6 +290,10 @@ export function getCustomerCounterfactuals(customerId: string) {
   return apiGetAuthenticated<CounterfactualResponse>(
     `/api/v1/customers/${customerId}/counterfactuals`,
   );
+}
+
+export function getModelHealth() {
+  return apiGetAuthenticated<ModelHealthResponse>("/api/v1/ml/model-health");
 }
 
 // ── Analytics ───────────────────────────────────────────────────────────────

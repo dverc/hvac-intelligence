@@ -31,6 +31,22 @@ export interface ShapExplanationResponse {
   top_protective_factors: string[];
 }
 
+export type DriftStatus = "STABLE" | "MONITOR" | "RETRAIN" | "INSUFFICIENT_DATA";
+export type ScoringMethod = "rule_based" | "ml_model";
+
+export interface ModelHealthResponse {
+  model_version: string;
+  model_quality: ScoringMethod;
+  auc_roc: number;
+  drift_status: DriftStatus;
+  psi: number;
+  needs_retraining: boolean;
+  last_checked: string | null;
+  scoring_method: ScoringMethod;
+  total_scores_30d: number;
+  ground_truth_labels_count: number;
+}
+
 export interface CounterfactualIntervention {
   feature: string;
   friendly_name: string;

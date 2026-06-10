@@ -92,7 +92,8 @@ def build_shap_explanation(
     customer_id: str,
 ) -> dict[str, Any]:
     """Build the full SHAP waterfall API response."""
-    from app.ml.churn_model import default_rule_score, predict_probability
+    from app.ml.churn_model import default_rule_score, get_unified_score
+    from app.ml.model_registry import get_metrics
 
     # Accept legacy call order (customer_id, feature_dict, model) from API routes.
     if isinstance(calibrated_model, str):
@@ -105,10 +106,10 @@ def build_shap_explanation(
     # Use the passed-in CalibratedClassifierCV directly — never a version string.
     model = calibrated_model if not isinstance(calibrated_model, str) else None
 
-    churn_probability = (
-        predict_probability(feature_dict=feature_dict, model=model)
-        if model is not None
-        else default_rule_score(feature_dict)
+    churn_probability, _ = get_unified_score(
+        feature_dict,
+        model,
+        get_metrics(),
     )
 
     base_estimator = _underlying_lgbm(model)

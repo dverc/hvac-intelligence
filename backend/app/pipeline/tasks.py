@@ -328,6 +328,28 @@ def _emit_intervention_complete(
     )
 
 
+@celery_app.task(name="app.pipeline.tasks.check_model_drift_and_retrain", **_STANDARD_TASK_RETRY)
+def check_model_drift_and_retrain(self) -> dict[str, Any]:
+    """Daily drift check; may trigger batch rescoring when PSI exceeds threshold."""
+    logger.info(
+        "Task starting: check_model_drift_and_retrain attempt=%s",
+        self.request.retries + 1,
+    )
+    from app.ml.retraining import check_and_trigger_retraining
+
+    session = get_sync_session()
+    try:
+        result = check_and_trigger_retraining(session)
+        session.commit()
+        return {"status": "ok", **result}
+    except Exception as exc:
+        session.rollback()
+        logger.exception("check_model_drift_and_retrain failed: %s", exc)
+        raise
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.pipeline.tasks.batch_rescore_customers", **_STANDARD_TASK_RETRY)
 def batch_rescore_customers(self) -> dict[str, Any]:
     """Batch re-score all active customers; emits BATCH_SCORE_COMPLETE on Redis."""

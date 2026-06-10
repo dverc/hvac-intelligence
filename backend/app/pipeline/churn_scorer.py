@@ -11,14 +11,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.ml.churn_model import (
-    ChurnModelEnsemble,
-    default_rule_score,
-    score_to_tier,
-)
+from app.ml.churn_model import ChurnModelEnsemble, get_unified_score, score_to_tier
+from app.ml.explainer import explain_prediction
 from app.ml.feature_engineering import ML_FEATURE_ORDER, build_customer_features
 from app.ml.feature_engineering import build_customer_features_sync
-from app.ml.model_registry import get_churn_ensemble
+from app.ml.model_registry import get_churn_ensemble, get_metrics
 from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
 
@@ -75,19 +72,24 @@ def score_customer_sync(
             return {"status": "error", "reason": "customer_not_found"}
 
         features = build_customer_features_sync(customer_id, session)
-        prediction = ensemble.predict(features)
-
-        if prediction.get("status") == "model_not_trained":
-            probability = default_rule_score(features)
-            prediction = {
-                "status": "ok",
-                "churn_probability": round(probability, 3),
-                "risk_tier": score_to_tier(probability),
-                "feature_contributions": [],
-                "model_version": "rule_fallback_v1",
-            }
-        elif prediction.get("churn_probability") is None:
-            return {"status": "skipped", "customer_id": str(customer_id)}
+        model = ensemble.calibrated_model if ensemble.is_ready else None
+        metrics = get_metrics(ensemble.model_version) or {}
+        probability, scoring_method = get_unified_score(features, model, metrics)
+        prediction = {
+            "status": "ok",
+            "churn_probability": round(probability, 3),
+            "risk_tier": score_to_tier(probability),
+            "feature_contributions": (
+                explain_prediction(features, model)
+                if scoring_method == "ml_model" and model is not None
+                else []
+            ),
+            "model_version": (
+                metrics.get("version", ensemble.model_version)
+                if scoring_method == "ml_model"
+                else "rule_fallback_v1"
+            ),
+        }
 
         _update_customer_metadata(
             customer,
@@ -128,19 +130,24 @@ async def score_customer_async(
             return {"status": "error", "reason": "customer_not_found"}
 
         features = await build_customer_features(customer_id, db)
-        prediction = ensemble.predict(features)
-
-        if prediction.get("status") == "model_not_trained":
-            probability = default_rule_score(features)
-            prediction = {
-                "status": "ok",
-                "churn_probability": round(probability, 3),
-                "risk_tier": score_to_tier(probability),
-                "feature_contributions": [],
-                "model_version": "rule_fallback_v1",
-            }
-        elif prediction.get("churn_probability") is None:
-            return {"status": "skipped", "customer_id": str(customer_id)}
+        model = ensemble.calibrated_model if ensemble.is_ready else None
+        metrics = get_metrics(ensemble.model_version) or {}
+        probability, scoring_method = get_unified_score(features, model, metrics)
+        prediction = {
+            "status": "ok",
+            "churn_probability": round(probability, 3),
+            "risk_tier": score_to_tier(probability),
+            "feature_contributions": (
+                explain_prediction(features, model)
+                if scoring_method == "ml_model" and model is not None
+                else []
+            ),
+            "model_version": (
+                metrics.get("version", ensemble.model_version)
+                if scoring_method == "ml_model"
+                else "rule_fallback_v1"
+            ),
+        }
 
         _update_customer_metadata(
             customer,

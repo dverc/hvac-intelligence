@@ -52,6 +52,10 @@ celery_app.conf.update(
             "task": "app.pipeline.tasks.send_weekly_client_reports",
             "schedule": crontab(hour=8, minute=0, day_of_week=1),
         },
+        "check-model-drift-and-retrain": {
+            "task": "app.pipeline.tasks.check_model_drift_and_retrain",
+            "schedule": crontab(minute=0, hour=3),
+        },
     },
 )
 

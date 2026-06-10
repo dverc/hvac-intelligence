@@ -14,8 +14,14 @@ import {
   YAxis,
 } from "recharts";
 
-import { ApiError, getCallAnalytics, type CallAnalyticsResponse } from "@/lib/api";
+import {
+  ApiError,
+  getCallAnalytics,
+  getModelHealth,
+  type CallAnalyticsResponse,
+} from "@/lib/api";
 import { getDashboardOrgId } from "@/lib/config";
+import type { DriftStatus, ModelHealthResponse, ScoringMethod } from "@/types/churn";
 
 const DAY_OPTIONS = [
   { label: "Last 7 days", value: 7 },
@@ -59,12 +65,115 @@ function StatCard({
   );
 }
 
+function scoringMethodLabel(method: ScoringMethod): string {
+  return method === "ml_model" ? "ML Model" : "Rule-Based Assessment";
+}
+
+function driftBadgeClasses(status: DriftStatus): string {
+  switch (status) {
+    case "STABLE":
+      return "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300";
+    case "MONITOR":
+      return "bg-yellow-100 text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300";
+    case "RETRAIN":
+      return "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300";
+    default:
+      return "bg-gray-100 text-gray-700 dark:bg-slate-800 dark:text-slate-300";
+  }
+}
+
+function ModelHealthCard({
+  health,
+  loading,
+  error,
+  onRefresh,
+}: {
+  health: ModelHealthResponse | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  const qualityColor =
+    health?.scoring_method === "ml_model" ? "text-green-600" : "text-yellow-600";
+
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-slate-100">
+            ML Model Health
+          </h2>
+          <p className="text-sm text-gray-500 dark:text-slate-400">
+            Scoring method, model quality, and drift monitoring
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+        >
+          {loading ? "Checking…" : "Check Now"}
+        </button>
+      </div>
+
+      {error ? (
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+      ) : loading && !health ? (
+        <div className="h-24 animate-pulse rounded-lg bg-gray-100 dark:bg-slate-800" />
+      ) : health ? (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-gray-100 p-4 dark:border-slate-800">
+            <p className="text-sm text-gray-500 dark:text-slate-400">Scoring Method</p>
+            <p className={`mt-2 text-lg font-semibold ${qualityColor}`}>
+              {scoringMethodLabel(health.scoring_method)}
+            </p>
+          </div>
+          <div className="rounded-lg border border-gray-100 p-4 dark:border-slate-800">
+            <p className="text-sm text-gray-500 dark:text-slate-400">Model Quality</p>
+            <p className={`mt-2 text-lg font-semibold ${qualityColor}`}>
+              {health.model_quality === "ml_model" ? "ML Active" : "Rule-Based Fallback"}
+            </p>
+          </div>
+          <div className="rounded-lg border border-gray-100 p-4 dark:border-slate-800">
+            <p className="text-sm text-gray-500 dark:text-slate-400">Drift Status</p>
+            <span
+              className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${driftBadgeClasses(health.drift_status)}`}
+            >
+              {health.drift_status.replace("_", " ")}
+            </span>
+          </div>
+          <div className="rounded-lg border border-gray-100 p-4 dark:border-slate-800">
+            <p className="text-sm text-gray-500 dark:text-slate-400">AUC-ROC</p>
+            <p className="mt-2 text-lg font-semibold text-gray-900 dark:text-slate-100">
+              {health.auc_roc.toFixed(3)}
+            </p>
+            <p className="mt-1 text-xs text-gray-400 dark:text-slate-500">
+              PSI {health.psi.toFixed(3)} · v{health.model_version}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      {health?.last_checked ? (
+        <p className="mt-4 text-xs text-gray-400 dark:text-slate-500">
+          Last checked{" "}
+          {format(parseISO(health.last_checked), "MMM d, yyyy h:mm a")}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export default function AnalyticsPage() {
   const orgId = getDashboardOrgId();
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<CallAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [modelHealth, setModelHealth] = useState<ModelHealthResponse | null>(null);
+  const [healthLoading, setHealthLoading] = useState(true);
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,9 +195,30 @@ export default function AnalyticsPage() {
     }
   }, [days, orgId]);
 
+  const loadModelHealth = useCallback(async () => {
+    setHealthLoading(true);
+    setHealthError(null);
+    try {
+      const response = await getModelHealth();
+      setModelHealth(response);
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Failed to load model health";
+      setHealthError(message);
+      setModelHealth(null);
+    } finally {
+      setHealthLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadModelHealth();
+  }, [load, loadModelHealth]);
 
   const hourChartData =
     data?.calls_by_hour.map((item) => ({
@@ -144,6 +274,15 @@ export default function AnalyticsPage() {
           {error}
         </div>
       )}
+
+      <ModelHealthCard
+        health={modelHealth}
+        loading={healthLoading}
+        error={healthError}
+        onRefresh={() => {
+          void loadModelHealth();
+        }}
+      />
 
       {loading ? (
         <div className="space-y-6">

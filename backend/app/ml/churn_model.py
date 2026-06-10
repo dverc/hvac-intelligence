@@ -147,7 +147,65 @@ def train_model(
 
     calibrated = CalibratedClassifierCV(base, method="isotonic", cv=3)
     calibrated.fit(X, y)
+
+    train_probs = calibrated.predict_proba(X)[:, 1]
+    metrics["training_scores"] = [float(prob) for prob in train_probs]
+
+    from app.ml.mlflow_tracker import log_training_run
+
+    log_training_run(
+        model_version=str(metrics.get("version", "training")),
+        metrics=metrics,
+        params={
+            "n_splits": 5,
+            "model_type": "lightgbm",
+            "n_samples": len(training_data),
+        },
+        feature_names=ML_FEATURE_ORDER,
+    )
+
     return calibrated, metrics
+
+
+def resolve_scoring_method(
+    model: CalibratedClassifierCV | None,
+    model_metrics: dict[str, Any] | None,
+) -> str:
+    """Return the active scoring source: rule_based or ml_model."""
+    auc = float((model_metrics or {}).get("auc_roc", 0.0))
+    if model is None or auc <= 0.55:
+        return "rule_based"
+    return "ml_model"
+
+
+def get_unified_score(
+    feature_dict: dict[str, Any],
+    model: CalibratedClassifierCV | None,
+    model_metrics: dict[str, Any] | None,
+) -> tuple[float, str]:
+    """
+    Single source of truth for churn probability.
+    Uses rule-based scoring when the model is missing or AUC-ROC <= 0.55.
+    """
+    method = resolve_scoring_method(model, model_metrics)
+    auc = float((model_metrics or {}).get("auc_roc", 0.0))
+
+    if method == "rule_based":
+        score = default_rule_score(feature_dict)
+        logger.info(
+            "Unified churn score: method=rule_based score=%.4f (AUC=%.3f)",
+            score,
+            auc,
+        )
+        return score, "rule_based"
+
+    score = predict_probability(feature_dict, model)
+    logger.info(
+        "Unified churn score: method=ml_model score=%.4f (AUC=%.3f)",
+        score,
+        auc,
+    )
+    return score, "ml_model"
 
 
 def predict_probability(
@@ -226,12 +284,23 @@ class ChurnModelEnsemble:
                 "model_version": None,
             }
 
-        probability = predict_probability(feature_dict, self._model)
-        tier = score_to_tier(probability)
-        contributions = explain_prediction(feature_dict, self._model)
-
         metrics = get_metrics(self.model_version) or {}
-        version_label = metrics.get("version", self.model_version)
+        probability, scoring_method = get_unified_score(
+            feature_dict,
+            self._model,
+            metrics,
+        )
+        tier = score_to_tier(probability)
+        contributions = (
+            explain_prediction(feature_dict, self._model)
+            if scoring_method == "ml_model"
+            else []
+        )
+        version_label = (
+            metrics.get("version", self.model_version)
+            if scoring_method == "ml_model"
+            else "rule_fallback_v1"
+        )
 
         return {
             "status": "ok",

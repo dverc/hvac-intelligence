@@ -10,6 +10,7 @@ from app.api.v1 import (
     imports,
     integrations,
     knowledge,
+    ml,
     onboarding,
     organizations,
     scheduling,
@@ -26,6 +27,7 @@ api_router.include_router(onboarding.router)
 api_router.include_router(calls.router)
 api_router.include_router(customers.router)
 api_router.include_router(churn.router)
+api_router.include_router(ml.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(imports.router)
 api_router.include_router(system.router)
