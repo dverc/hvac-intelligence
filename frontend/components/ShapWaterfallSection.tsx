@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, Text } from "@tremor/react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -21,11 +21,57 @@ interface Props {
   customerId: string;
 }
 
+const INCREASES_RISK_COLOR = "#ef4444";
+const DECREASES_RISK_COLOR = "#22c55e";
+
+const EMPTY_SHAP_MESSAGE =
+  "Risk factor analysis will populate after the model is trained on real customer data. Current score is based on rule-based assessment.";
+
 function truncateLabel(label: string, max = 20): string {
   if (label.length <= max) {
     return label;
   }
   return `${label.slice(0, max - 1)}…`;
+}
+
+function directionColor(direction: "INCREASES_RISK" | "DECREASES_RISK"): string {
+  return direction === "INCREASES_RISK" ? INCREASES_RISK_COLOR : DECREASES_RISK_COLOR;
+}
+
+function directionLabel(direction: "INCREASES_RISK" | "DECREASES_RISK"): string {
+  return direction === "INCREASES_RISK" ? "Increases Risk" : "Decreases Risk";
+}
+
+interface ChartDatum {
+  name: string;
+  fullName: string;
+  shap_value: number;
+  direction: "INCREASES_RISK" | "DECREASES_RISK";
+  fill: string;
+}
+
+function ShapTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: ChartDatum }>;
+}) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+
+  const entry = payload[0].payload;
+
+  return (
+    <div className="rounded border border-gray-200 bg-white p-3 text-sm shadow-md">
+      <p className="font-medium text-gray-900">{entry.fullName}</p>
+      <p className="mt-1 text-gray-700">SHAP value: {entry.shap_value.toFixed(4)}</p>
+      <p className="mt-1 font-medium" style={{ color: entry.fill }}>
+        {directionLabel(entry.direction)}
+      </p>
+    </div>
+  );
 }
 
 export function ShapWaterfallSection({ customerId }: Props) {
@@ -66,12 +112,34 @@ export function ShapWaterfallSection({ customerId }: Props) {
     };
   }, [customerId]);
 
-  const chartData =
-    data?.features.map((feature) => ({
-      name: truncateLabel(feature.friendly_name),
-      shap_value: feature.shap_value,
-      fill: feature.shap_value >= 0 ? "#f97316" : "#22c55e",
-    })) ?? [];
+  const chartData: ChartDatum[] = useMemo(
+    () =>
+      data?.features.map((feature) => ({
+        name: truncateLabel(feature.friendly_name),
+        fullName: feature.friendly_name,
+        shap_value: feature.shap_value,
+        direction: feature.direction,
+        fill: directionColor(feature.direction),
+      })) ?? [],
+    [data],
+  );
+
+  const hasMeaningfulShap =
+    chartData.length > 0 && chartData.some((feature) => feature.shap_value !== 0);
+
+  const yDomain = useMemo(() => {
+    if (!hasMeaningfulShap) {
+      return [0, 1] as [number, number];
+    }
+
+    const values = chartData.map((feature) => feature.shap_value);
+    const minValue = Math.min(...values, 0);
+    const maxValue = Math.max(...values, 0);
+    const span = maxValue - minValue;
+    const padding = span > 0 ? span * 0.1 : 0.01;
+
+    return [minValue - padding, maxValue + padding] as [number, number];
+  }, [chartData, hasMeaningfulShap]);
 
   return (
     <Card>
@@ -84,10 +152,8 @@ export function ShapWaterfallSection({ customerId }: Props) {
         <p className="mt-4 text-sm text-gray-500">Loading SHAP analysis…</p>
       ) : error ? (
         <p className="mt-4 text-sm text-red-600">{error}</p>
-      ) : !data || chartData.length === 0 ? (
-        <p className="mt-4 text-sm text-gray-500">
-          No SHAP data available yet — scores will populate after model training.
-        </p>
+      ) : !data || !hasMeaningfulShap ? (
+        <p className="mt-4 text-sm text-gray-500">{EMPTY_SHAP_MESSAGE}</p>
       ) : (
         <div className="mt-4">
           <p className="mb-2 text-xs text-gray-500">
@@ -105,14 +171,12 @@ export function ShapWaterfallSection({ customerId }: Props) {
                 textAnchor="end"
                 height={70}
               />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip
-                formatter={(value: number) => [value.toFixed(4), "SHAP value"]}
-              />
+              <YAxis tick={{ fontSize: 11 }} domain={yDomain} />
+              <Tooltip content={<ShapTooltip />} />
               <ReferenceLine y={0} stroke="#9ca3af" />
               <Bar dataKey="shap_value" radius={[4, 4, 0, 0]}>
                 {chartData.map((entry) => (
-                  <Cell key={entry.name} fill={entry.fill} />
+                  <Cell key={entry.fullName} fill={entry.fill} />
                 ))}
               </Bar>
             </BarChart>
