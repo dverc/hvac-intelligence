@@ -61,23 +61,38 @@ def save_model(model: Any, version: str, metrics: dict[str, Any]) -> Path:
 
 
 def load_model(version: str = DEFAULT_MODEL_VERSION) -> Any | None:
-    """Load a versioned model; falls back to churn_model.pkl."""
-    candidates = []
-    if version == DEFAULT_MODEL_VERSION:
-        candidates.append(models_dir() / _LEGACY_MODEL_FILENAME)
-        versions = list_versions()
-        if versions:
-            candidates.insert(0, _model_path(versions[0]))
-    else:
-        candidates.append(_model_path(version))
-        candidates.append(models_dir() / _LEGACY_MODEL_FILENAME)
+    """Load a versioned model artifact with joblib; returns the model object."""
+    candidate_paths: list[Path] = []
 
-    for path in candidates:
-        if path.exists():
-            try:
-                return joblib.load(path)
-            except Exception as exc:
-                logger.warning("Failed to load model from %s: %s", path, exc)
+    if version == DEFAULT_MODEL_VERSION:
+        for listed_version in list_versions():
+            if listed_version == DEFAULT_MODEL_VERSION:
+                candidate_paths.append(models_dir() / _LEGACY_MODEL_FILENAME)
+            else:
+                candidate_paths.append(models_dir() / f"{listed_version}.pkl")
+        if not candidate_paths:
+            candidate_paths.append(models_dir() / _LEGACY_MODEL_FILENAME)
+    else:
+        candidate_paths.append(models_dir() / f"{version}.pkl")
+        candidate_paths.append(models_dir() / _LEGACY_MODEL_FILENAME)
+
+    seen: set[str] = set()
+    for path in candidate_paths:
+        resolved = str(path.resolve())
+        if resolved in seen or not path.is_file():
+            continue
+        seen.add(resolved)
+        try:
+            model = joblib.load(path)
+            if isinstance(model, str):
+                logger.warning(
+                    "Artifact at %s is a string, not a model object — skipping",
+                    path,
+                )
+                continue
+            return model
+        except Exception as exc:
+            logger.warning("Failed to load model from %s: %s", path, exc)
     return None
 
 
@@ -122,6 +137,8 @@ def get_churn_ensemble() -> "ChurnModelEnsemble":
     from app.ml.churn_model import ChurnModelEnsemble
 
     global _ensemble
-    if _ensemble is None:
+    if _ensemble is None or isinstance(_ensemble, str) or not hasattr(
+        _ensemble, "predict"
+    ):
         _ensemble = ChurnModelEnsemble()
     return _ensemble

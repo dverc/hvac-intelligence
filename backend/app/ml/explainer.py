@@ -39,10 +39,17 @@ def _extract_shap_values(
 
     expected = explainer.expected_value
     if isinstance(expected, (list, np.ndarray)):
-        baseline = float(expected[1] if len(expected) > 1 else expected[0])
+        baseline_log_odds = float(expected[1] if len(expected) > 1 else expected[0])
     else:
-        baseline = float(expected)
-    return np.asarray(values, dtype=float), baseline
+        baseline_log_odds = float(expected)
+
+    base_prob = float(1.0 / (1.0 + np.exp(-baseline_log_odds)))
+    values = np.asarray(values, dtype=float)
+    denom = 4.0 * base_prob * (1.0 - base_prob)
+    if denom > 0:
+        values = values / denom
+
+    return values, base_prob
 
 
 def compute_full_shap_contributions(
@@ -58,7 +65,7 @@ def compute_full_shap_contributions(
         row = pd.DataFrame(
             [{key: float(feature_dict.get(key, 0.0)) for key in ML_FEATURE_ORDER}]
         )[ML_FEATURE_ORDER]
-        explainer = shap.TreeExplainer(base_estimator, model_output="probability")
+        explainer = shap.TreeExplainer(base_estimator)
         values, _ = _extract_shap_values(explainer, row)
 
         rows = [
@@ -80,20 +87,31 @@ def compute_full_shap_contributions(
 
 
 def build_shap_explanation(
-    customer_id: str,
-    feature_dict: dict[str, float],
     calibrated_model: Any | None,
+    feature_dict: dict[str, float],
+    customer_id: str,
 ) -> dict[str, Any]:
     """Build the full SHAP waterfall API response."""
     from app.ml.churn_model import default_rule_score, predict_probability
 
+    # Accept legacy call order (customer_id, feature_dict, model) from API routes.
+    if isinstance(calibrated_model, str):
+        customer_id, feature_dict, calibrated_model = (
+            calibrated_model,
+            feature_dict,
+            customer_id,
+        )
+
+    # Use the passed-in CalibratedClassifierCV directly — never a version string.
+    model = calibrated_model if not isinstance(calibrated_model, str) else None
+
     churn_probability = (
-        predict_probability(feature_dict, calibrated_model)
-        if calibrated_model is not None
+        predict_probability(feature_dict=feature_dict, model=model)
+        if model is not None
         else default_rule_score(feature_dict)
     )
 
-    base_estimator = _underlying_lgbm(calibrated_model)
+    base_estimator = _underlying_lgbm(model)
     baseline_probability = default_rule_score(
         {key: _DEFAULT_FEATURES[key] for key in ML_FEATURE_ORDER}
     )
@@ -104,7 +122,7 @@ def build_shap_explanation(
             row = pd.DataFrame(
                 [{key: float(feature_dict.get(key, 0.0)) for key in ML_FEATURE_ORDER}]
             )[ML_FEATURE_ORDER]
-            explainer = shap.TreeExplainer(base_estimator, model_output="probability")
+            explainer = shap.TreeExplainer(base_estimator)
             values, baseline_probability = _extract_shap_values(explainer, row)
             baseline_probability = float(max(0.0, min(1.0, baseline_probability)))
 
