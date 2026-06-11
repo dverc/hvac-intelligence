@@ -40,8 +40,10 @@ async def _rate_limit_exceeded_handler(
 
 
 async def verify_dashboard_api_key_except_portal(request: Request) -> None:
-    """Dashboard API key for staff routes; customer portal is public (no JWT, no API key)."""
+    """Dashboard API key for staff routes; customer portal and SSE stream use their own auth."""
     if request.url.path.startswith("/api/v1/portal"):
+        return
+    if request.url.path.startswith("/api/v1/stream"):
         return
     await verify_dashboard_api_key(request)
 

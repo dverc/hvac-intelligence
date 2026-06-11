@@ -11,6 +11,7 @@ import {
 
 export default function AdminOnboardingIndexPage() {
   const [orgs, setOrgs] = useState<AdminOrganizationListItem[]>([]);
+  const [completedOrgs, setCompletedOrgs] = useState<AdminOrganizationListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,6 +21,15 @@ export default function AdminOnboardingIndexPage() {
     try {
       const rows = await listAdminOrganizations();
       setOrgs(rows.filter((org) => !org.onboarding_completed));
+      setCompletedOrgs(
+        rows
+          .filter((org) => org.onboarding_completed)
+          .sort(
+            (a, b) =>
+              new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+          )
+          .slice(0, 5),
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load onboarding queue");
     } finally {
@@ -53,7 +63,7 @@ export default function AdminOnboardingIndexPage() {
           <div className="space-y-2">
             <p className="text-sm text-gray-500">No clients awaiting onboarding.</p>
             <Link
-              href="/dashboard/admin/organizations"
+              href="/dashboard/admin/organizations?action=new"
               className="text-sm font-medium text-indigo-600 hover:underline"
             >
               Add a new client →
@@ -85,6 +95,45 @@ export default function AdminOnboardingIndexPage() {
           </ul>
         )}
       </div>
+
+      {completedOrgs.length > 0 && (
+        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-slate-100">
+            Recently Completed
+          </h2>
+          <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
+            Clients that finished onboarding.
+          </p>
+          <ul className="mt-4 divide-y dark:divide-slate-800">
+            {completedOrgs.map((org) => (
+              <li
+                key={org.org_id}
+                className="flex items-center justify-between py-3 first:pt-0 last:pb-0"
+              >
+                <div>
+                  <p className="font-medium text-gray-900 dark:text-slate-100">
+                    {org.display_name || org.org_name}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Completed{" "}
+                    {new Date(org.created_at).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </p>
+                </div>
+                <Link
+                  href={`/dashboard/admin/onboarding/${org.org_id}`}
+                  className="text-sm font-medium text-indigo-600 hover:underline"
+                >
+                  Edit
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

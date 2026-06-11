@@ -1060,12 +1060,14 @@ export function getDriveStatus(orgId: string) {
 
 // ── SSE (dashboard real-time) ───────────────────────────────────────────────
 
-/** URL for EventSource — not a JSON fetch. Auth via query param (SSE cannot set headers). */
+/** URL for EventSource — not a JSON fetch. Auth via JWT query param (SSE cannot set headers). */
 export function getChurnEventsStreamUrl() {
   const url = new URL(`${getApiBaseUrl()}/api/v1/stream/churn-events`);
-  const key = getPublicApiKey();
-  if (key) {
-    url.searchParams.set("api_key", key);
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("hvac_token");
+    if (token) {
+      url.searchParams.set("token", token);
+    }
   }
   return url.toString();
 }

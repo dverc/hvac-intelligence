@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
 
 import {
   ApiError,
@@ -22,8 +22,9 @@ function statusBadgeClass(status: string): string {
   }
 }
 
-export default function AdminOrganizationsPage() {
+function AdminOrganizationsPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [orgs, setOrgs] = useState<AdminOrganizationListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +52,12 @@ export default function AdminOrganizationsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (searchParams.get("action") === "new") {
+      setModalOpen(true);
+    }
+  }, [searchParams]);
 
   async function handleCreate() {
     setCreating(true);
@@ -228,5 +235,19 @@ export default function AdminOrganizationsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function AdminOrganizationsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <span className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+        </div>
+      }
+    >
+      <AdminOrganizationsPageContent />
+    </Suspense>
   );
 }

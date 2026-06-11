@@ -6,9 +6,11 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import update
 
 from app.core.constants import SEED_ORG_ID
 from app.models.dispatch_job import DispatchJob
+from app.models.technician_schedule import TechnicianSchedule
 from app.services.dispatch_service import DispatchService
 from app.services.window_parser import parse_preferred_window
 
@@ -79,6 +81,15 @@ async def test_create_job_stores_requested_window_in_utc(
 ):
     fixed_today = date(2026, 6, 9)
     tz_name = "America/Los_Angeles"
+    await db_session.execute(
+        update(TechnicianSchedule)
+        .where(
+            TechnicianSchedule.technician_id
+            == uuid.UUID(seeded_customer["technician_id"])
+        )
+        .values(effective_from=fixed_today)
+    )
+    await db_session.flush()
     with patch(
         "app.services.window_parser._today_in_tz",
         return_value=fixed_today,
@@ -93,7 +104,7 @@ async def test_create_job_stores_requested_window_in_utc(
             org_id=SEED_ORG_ID,
         )
 
-    assert result["success"] is True
+    assert result["success"] is True, result
     job = await db_session.get(DispatchJob, uuid.UUID(result["job_id"]))
     assert job is not None
     start_utc = job.scheduled_window_start

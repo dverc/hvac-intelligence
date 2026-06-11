@@ -43,7 +43,7 @@ api_router.include_router(scheduling.router, dependencies=_jwt_auth)
 api_router.include_router(integrations.router, dependencies=_jwt_auth)
 api_router.include_router(analytics.router, dependencies=_jwt_auth)
 api_router.include_router(outbound.router, dependencies=_jwt_auth)
-api_router.include_router(stream.router, dependencies=_jwt_auth)
+api_router.include_router(stream.router)
 
 vapi_router = webhook_vapi.router
 google_oauth_router = integrations.google_oauth_router
