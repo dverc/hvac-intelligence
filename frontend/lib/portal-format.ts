@@ -1,4 +1,4 @@
-const PORTAL_TZ = "America/Los_Angeles";
+const PORTAL_TZ_FALLBACK = "America/Los_Angeles";
 
 export function formatPortalPhoneInput(value: string): string {
   const digits = value.replace(/\D/g, "").slice(0, 10);
@@ -12,24 +12,26 @@ export function formatPortalPhoneInput(value: string): string {
 export function formatAppointmentWindow(
   startIso: string | null,
   endIso: string | null,
+  timezone?: string,
 ): string {
+  const tz = timezone ?? PORTAL_TZ_FALLBACK;
   if (!startIso) return "Time to be confirmed";
   const start = new Date(startIso);
   const end = endIso ? new Date(endIso) : null;
   const day = new Intl.DateTimeFormat("en-US", {
-    timeZone: PORTAL_TZ,
+    timeZone: tz,
     weekday: "long",
     month: "long",
     day: "numeric",
   }).format(start);
   const startTime = new Intl.DateTimeFormat("en-US", {
-    timeZone: PORTAL_TZ,
+    timeZone: tz,
     hour: "numeric",
     minute: "2-digit",
   }).format(start);
   if (!end) return `${day} · ${startTime}`;
   const endTime = new Intl.DateTimeFormat("en-US", {
-    timeZone: PORTAL_TZ,
+    timeZone: tz,
     hour: "numeric",
     minute: "2-digit",
   }).format(end);

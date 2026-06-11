@@ -15,10 +15,12 @@ import { formatAppointmentWindow, statusBadgeClass } from "@/lib/portal-format";
 function AppointmentCard({
   appointment,
   customerId,
+  timezone,
   muted = false,
 }: {
   appointment: PortalAppointment;
   customerId: string;
+  timezone?: string;
   muted?: boolean;
 }) {
   return (
@@ -35,6 +37,7 @@ function AppointmentCard({
             {formatAppointmentWindow(
               appointment.scheduled_window_start,
               appointment.scheduled_window_end,
+              timezone,
             )}
           </p>
           <p className="mt-1 text-xs text-gray-500">Job #{appointment.job_number}</p>
@@ -77,6 +80,7 @@ export default function PortalAppointmentsPage() {
   const [upcoming, setUpcoming] = useState<PortalAppointment[]>([]);
   const [past, setPast] = useState<PortalAppointment[]>([]);
   const [showPast, setShowPast] = useState(false);
+  const [timezone, setTimezone] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,6 +93,11 @@ export default function PortalAppointmentsPage() {
           const data = await portalGetAppointments(customerIdParam);
           setCustomerId(data.customer_id);
           setName(data.name);
+          setTimezone(
+            typeof (data as { timezone?: string }).timezone === "string"
+              ? (data as { timezone: string }).timezone
+              : undefined,
+          );
           setUpcoming(data.upcoming_appointments);
           setPast(data.past_appointments);
         } else if (phone) {
@@ -99,6 +108,11 @@ export default function PortalAppointmentsPage() {
           }
           setCustomerId(data.customer_id);
           setName(data.name ?? "");
+          setTimezone(
+            typeof (data as { timezone?: string }).timezone === "string"
+              ? (data as { timezone: string }).timezone
+              : undefined,
+          );
           setUpcoming(data.upcoming_appointments);
           setPast(data.past_appointments);
         } else {
@@ -157,6 +171,7 @@ export default function PortalAppointmentsPage() {
                 key={appt.id}
                 appointment={appt}
                 customerId={customerId}
+                timezone={timezone}
               />
             ))}
           </div>
@@ -182,6 +197,7 @@ export default function PortalAppointmentsPage() {
                   key={appt.id}
                   appointment={appt}
                   customerId={customerId}
+                  timezone={timezone}
                   muted
                 />
               ))
