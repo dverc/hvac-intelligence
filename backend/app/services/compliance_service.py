@@ -21,6 +21,7 @@ from app.core.constants import (
     TCPA_CALLING_HOURS_START,
 )
 from app.models.customer import Customer
+from app.models.org_settings import OrgSettings
 from app.models.organization import Organization
 from app.models.outbound_campaign import ConsentRecord, OutboundCallAttempt
 from app.schemas.organization import OrganizationSettings
@@ -93,13 +94,50 @@ _AREA_CODE_TIMEZONE: dict[str, str] = {
 }
 
 
-def get_org_display_name(org: Organization) -> str:
+async def fetch_org_settings(
+    db: AsyncSession, org_id: uuid.UUID
+) -> OrgSettings | None:
+    return (
+        await db.execute(select(OrgSettings).where(OrgSettings.org_id == org_id))
+    ).scalar_one_or_none()
+
+
+def get_org_display_name(
+    org: Organization, org_settings: OrgSettings | None = None
+) -> str:
     """Client company name for disclosures — never 'HVAC Intelligence'."""
-    settings = OrganizationSettings.model_validate(org.settings or {})
-    display = (settings.outbound_display_name or "").strip()
+    if org_settings is not None:
+        display = (org_settings.display_name or "").strip()
+        if display:
+            return display
+    json_settings = OrganizationSettings.model_validate(org.settings or {})
+    display = (json_settings.outbound_display_name or "").strip()
     if display:
         return display
     return org.org_name
+
+
+async def get_org_display_name_from_db(
+    db: AsyncSession, org: Organization
+) -> str:
+    org_settings = await fetch_org_settings(db, org.org_id)
+    return get_org_display_name(org, org_settings)
+
+
+def get_org_disclosure_style(
+    org: Organization, org_settings: OrgSettings | None = None
+) -> str:
+    if org_settings is not None:
+        return org_settings.outbound_disclosure_style
+    json_settings = OrganizationSettings.model_validate(org.settings or {})
+    return json_settings.outbound_disclosure_style or "FRIENDLY"
+
+
+async def get_org_disclosure_style_from_db(
+    db: AsyncSession, org: Organization
+) -> str:
+    org_settings = await fetch_org_settings(db, org.org_id)
+    return get_org_disclosure_style(org, org_settings)
 
 
 def get_disclosure_text(org_display_name: str, disclosure_style: str) -> str:
@@ -149,6 +187,7 @@ def check_calling_hours(
     calling_hours_end: int,
     *,
     now: datetime | None = None,
+    org_timezone: str | None = None,
 ) -> bool:
     """True when current local time is within the legal TCPA window and org window."""
     start_hour = max(calling_hours_start, TCPA_CALLING_HOURS_START)
@@ -156,7 +195,7 @@ def check_calling_hours(
     if start_hour >= end_hour:
         return False
 
-    tz_name = timezone_for_phone(customer_phone)
+    tz_name = org_timezone or timezone_for_phone(customer_phone)
     local_now = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz_name))
     return start_hour <= local_now.hour < end_hour
 

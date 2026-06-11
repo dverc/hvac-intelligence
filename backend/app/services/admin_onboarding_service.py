@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import uuid
@@ -50,6 +51,17 @@ def _org_status(org: Organization, settings: OrgSettings | None) -> str:
 
 def _settings_out(settings: OrgSettings) -> OrgSettingsOut:
     return OrgSettingsOut.model_validate(settings)
+
+
+def _sync_settings_to_org_jsonb(org: Organization, settings: OrgSettings) -> None:
+    """Mirror org_settings fields into organizations.settings JSONB for legacy readers."""
+    merged = dict(org.settings or {})
+    if settings.display_name:
+        merged["outbound_display_name"] = settings.display_name
+    merged["outbound_enabled"] = settings.outbound_enabled
+    merged["outbound_disclosure_style"] = settings.outbound_disclosure_style
+    merged["timezone"] = settings.timezone
+    org.settings = merged
 
 
 class AdminOnboardingService:
@@ -154,13 +166,18 @@ class AdminOnboardingService:
         self, body: AdminOrganizationCreate
     ) -> AdminOrganizationCreateResponse:
         slug = await self._unique_slug(_slugify(body.company_name))
+        org_json_settings: dict[str, str] = {"timezone": "America/Los_Angeles"}
+        if body.admin_first_name.strip():
+            org_json_settings["admin_first_name"] = body.admin_first_name.strip()
+        if body.admin_last_name.strip():
+            org_json_settings["admin_last_name"] = body.admin_last_name.strip()
         org = Organization(
             org_name=body.company_name.strip(),
             slug=slug,
             industry=body.industry,
             plan_tier=body.plan_tier,
             is_active=True,
-            settings={"timezone": "America/Los_Angeles"},
+            settings=org_json_settings,
         )
         self.db.add(org)
         await self.db.flush()
@@ -268,7 +285,10 @@ class AdminOnboardingService:
                 setattr(settings, field, value)
 
         if body.display_name is not None:
-            org.agent_name = settings.agent_name
+            org.org_name = body.display_name
+            org.agent_name = body.display_name
+        if body.agent_name is not None:
+            org.agent_name = body.agent_name
 
         if body.vapi_assistant_id is not None:
             org.vapi_assistant_id = body.vapi_assistant_id
@@ -276,6 +296,8 @@ class AdminOnboardingService:
             org.vapi_phone_number_id = body.vapi_phone_number_id
         if body.vapi_phone_number is not None:
             org.vapi_phone_number = body.vapi_phone_number
+
+        _sync_settings_to_org_jsonb(org, settings)
 
         await self.db.flush()
         await self.db.refresh(org)
@@ -442,7 +464,8 @@ class AdminOnboardingService:
             or 0
         )
         example_created = False
-        if customer_count == 0:
+        env = os.getenv("ENVIRONMENT", "production")
+        if customer_count == 0 and env in ("development", "test", "dev"):
             self.db.add(
                 Customer(
                     org_id=org_id,

@@ -43,8 +43,6 @@ export default function DashboardLayout({
   }, [signOutModalOpen]);
 
   useEffect(() => {
-    console.log("layout mounted");
-
     if (typeof window === "undefined") {
       return;
     }
@@ -52,13 +50,8 @@ export default function DashboardLayout({
     let cancelled = false;
 
     const token = getAuthToken();
-    console.log(
-      "[dashboard layout] token:",
-      token ? `${token.slice(0, 20)}...` : null,
-    );
 
     if (!token) {
-      console.log("[dashboard layout] no token found, redirecting to /login");
       router.replace("/login");
       return;
     }
@@ -72,7 +65,6 @@ export default function DashboardLayout({
         if (cancelled) {
           return;
         }
-        console.log("[dashboard layout] /auth/me response:", user);
         setUserEmail(user.email);
         setIsAdmin(user.role === "admin");
       } catch (err) {
@@ -81,7 +73,6 @@ export default function DashboardLayout({
         }
         console.error("[dashboard layout] /auth/me error:", err);
         if (err instanceof AuthError && err.status === 401) {
-          console.log("[dashboard layout] 401 from /auth/me, redirecting to /login");
           clearAuthSession();
           router.replace("/login");
         }

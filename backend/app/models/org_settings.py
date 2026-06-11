@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,7 +23,13 @@ from app.core.database import Base
 
 class OrgSettings(Base):
     __tablename__ = "org_settings"
-    __table_args__ = (UniqueConstraint("org_id", name="uq_org_settings_org_id"),)
+    __table_args__ = (
+        UniqueConstraint("org_id", name="uq_org_settings_org_id"),
+        CheckConstraint(
+            "onboarding_step >= 0 AND onboarding_step <= 5",
+            name="ck_onboarding_step_range",
+        ),
+    )
 
     setting_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

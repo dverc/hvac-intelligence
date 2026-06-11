@@ -14,7 +14,10 @@ from app.core.config import get_settings
 from app.models.customer import Customer
 from app.models.organization import Organization
 from app.models.outbound_campaign import OutboundCallAttempt, OutboundCampaign
-from app.services.compliance_service import get_disclosure_text, get_org_display_name
+from app.services.compliance_service import (
+    get_disclosure_text,
+    get_org_display_name_from_db,
+)
 from app.services.sms_service import normalize_phone_to_e164
 
 logger = logging.getLogger(__name__)
@@ -76,17 +79,22 @@ class VapiOutboundService:
         if not phone:
             return {"success": False, "error": "invalid_phone"}
 
-        display_name = get_org_display_name(org)
+        display_name = await get_org_display_name_from_db(self.db, org)
         disclosure = get_disclosure_text(display_name, campaign.disclosure_style)
         first_message = (
             f"{disclosure} I'm calling about your HVAC service. Do you have a moment?"
         )
 
-        phone_number_id = (
-            (org.vapi_phone_number_id or "").strip()
-            or settings.VAPI_PHONE_NUMBER_ID.strip()
-        )
-        assistant_id = (org.vapi_assistant_id or "").strip() or settings.VAPI_ASSISTANT_ID
+        org_phone_id = (org.vapi_phone_number_id or "").strip()
+        org_assistant_id = (org.vapi_assistant_id or "").strip()
+        phone_number_id = org_phone_id or settings.VAPI_PHONE_NUMBER_ID.strip()
+        assistant_id = org_assistant_id or settings.VAPI_ASSISTANT_ID
+        if not org_phone_id or not org_assistant_id:
+            logger.warning(
+                "Org %s has no Vapi config — falling back to platform defaults. "
+                "Set vapi_assistant_id and vapi_phone_number_id in org settings.",
+                org.org_id,
+            )
 
         payload = {
             "assistantId": assistant_id,

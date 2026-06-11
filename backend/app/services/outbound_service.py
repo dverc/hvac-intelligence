@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -19,11 +20,24 @@ from app.models.customer import Customer
 from app.models.organization import Organization
 from app.models.outbound_campaign import OutboundCallAttempt, OutboundCampaign
 from app.schemas.organization import OrganizationSettings
-from app.services.compliance_service import ComplianceService, check_calling_hours
+from app.services.compliance_service import (
+    ComplianceService,
+    check_calling_hours,
+    fetch_org_settings,
+)
 from app.services.sms_service import normalize_phone_to_e164
 from app.services.vapi_outbound_service import VapiOutboundService
 
 logger = logging.getLogger(__name__)
+
+
+async def org_outbound_enabled(db: AsyncSession, org: Organization) -> bool:
+    """Read outbound_enabled from org_settings, falling back to org.settings JSONB."""
+    org_settings = await fetch_org_settings(db, org.org_id)
+    if org_settings is not None:
+        return bool(org_settings.outbound_enabled)
+    settings = OrganizationSettings.model_validate(org.settings or {})
+    return bool(settings.outbound_enabled)
 
 
 class OutboundService:
@@ -33,8 +47,7 @@ class OutboundService:
         self.vapi = VapiOutboundService(db)
 
     async def _org_outbound_enabled(self, org: Organization) -> bool:
-        settings = OrganizationSettings.model_validate(org.settings or {})
-        return bool(settings.outbound_enabled)
+        return await org_outbound_enabled(self.db, org)
 
     async def _customers_above_threshold(
         self,
@@ -186,11 +199,27 @@ class OutboundService:
         if campaign is None:
             raise ValueError("Campaign not found")
 
+        if campaign.status == "RUNNING":
+            pass
+        elif campaign.status == "ACTIVE":
+            campaign.status = "RUNNING"
+            await self.db.flush()
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Campaign must be ACTIVE to execute",
+            )
+
         org = await self.db.get(Organization, campaign.org_id)
         if org is None:
             raise ValueError("Organization not found")
 
+        org_settings = await fetch_org_settings(self.db, campaign.org_id)
+        org_timezone = org_settings.timezone if org_settings else None
+
         if not await self._org_outbound_enabled(org):
+            campaign.status = "ACTIVE"
+            await self.db.flush()
             return {
                 "total_attempted": 0,
                 "total_blocked": 0,
@@ -206,64 +235,78 @@ class OutboundService:
         total_attempted = 0
         total_blocked = 0
         total_called = 0
+        total_consented = 0
         block_reasons: Counter[str] = Counter()
 
-        for customer, _score in candidates:
-            total_attempted += 1
-            eligibility = await self.compliance.check_outbound_eligibility(
-                customer.customer_id,
-                campaign.org_id,
-                max_attempts=campaign.max_attempts,
-            )
-            if not eligibility["eligible"]:
-                reason = eligibility["reason"]
-                status_map = {
-                    "DNC_REGISTERED": "DNC_BLOCKED",
-                    "NO_CONSENT": "CONSENT_BLOCKED",
-                    "MAX_ATTEMPTS_REACHED": "CONSENT_BLOCKED",
-                    "NO_PHONE": "FAILED",
-                }
-                status = status_map.get(reason, "FAILED")
-                await self._log_blocked_attempt(campaign, customer, status, notes=reason)
-                total_blocked += 1
-                block_reasons[reason] += 1
-                continue
-
-            if not check_calling_hours(
-                customer.phone_primary,
-                campaign.calling_hours_start,
-                campaign.calling_hours_end,
-            ):
-                await self._log_blocked_attempt(
-                    campaign, customer, "HOURS_BLOCKED", notes="Outside calling hours"
+        try:
+            for customer, _score in candidates:
+                total_attempted += 1
+                eligibility = await self.compliance.check_outbound_eligibility(
+                    customer.customer_id,
+                    campaign.org_id,
+                    max_attempts=campaign.max_attempts,
                 )
-                total_blocked += 1
-                block_reasons["HOURS_BLOCKED"] += 1
-                continue
+                if not eligibility["eligible"]:
+                    reason = eligibility["reason"]
+                    status_map = {
+                        "DNC_REGISTERED": "DNC_BLOCKED",
+                        "NO_CONSENT": "CONSENT_BLOCKED",
+                        "MAX_ATTEMPTS_REACHED": "CONSENT_BLOCKED",
+                        "NO_PHONE": "FAILED",
+                    }
+                    status = status_map.get(reason, "FAILED")
+                    await self._log_blocked_attempt(
+                        campaign, customer, status, notes=reason
+                    )
+                    total_blocked += 1
+                    block_reasons[reason] += 1
+                    continue
 
-            phone = normalize_phone_to_e164(customer.phone_primary or "")
-            attempt = OutboundCallAttempt(
-                campaign_id=campaign.campaign_id,
-                customer_id=customer.customer_id,
-                org_id=campaign.org_id,
-                phone_number=phone,
-                status="PENDING",
-            )
-            self.db.add(attempt)
+                if not check_calling_hours(
+                    customer.phone_primary,
+                    campaign.calling_hours_start,
+                    campaign.calling_hours_end,
+                    org_timezone=org_timezone,
+                ):
+                    await self._log_blocked_attempt(
+                        campaign, customer, "HOURS_BLOCKED", notes="Outside calling hours"
+                    )
+                    total_blocked += 1
+                    block_reasons["HOURS_BLOCKED"] += 1
+                    continue
+
+                if eligibility.get("checks", {}).get("consent"):
+                    total_consented += 1
+
+                phone = normalize_phone_to_e164(customer.phone_primary or "")
+                attempt = OutboundCallAttempt(
+                    campaign_id=campaign.campaign_id,
+                    customer_id=customer.customer_id,
+                    org_id=campaign.org_id,
+                    phone_number=phone,
+                    status="PENDING",
+                )
+                self.db.add(attempt)
+                await self.db.flush()
+
+                result = await self.vapi.place_outbound_call(
+                    customer, org, campaign, attempt.attempt_id
+                )
+                if result.get("success"):
+                    total_called += 1
+                    campaign.total_calls_made += 1
+                else:
+                    total_blocked += 1
+                    block_reasons["VAPI_FAILED"] += 1
+
+            campaign.total_consented += total_consented
+            campaign.updated_at = datetime.now(timezone.utc)
+            campaign.status = "ACTIVE"
             await self.db.flush()
-
-            result = await self.vapi.place_outbound_call(
-                customer, org, campaign, attempt.attempt_id
-            )
-            if result.get("success"):
-                total_called += 1
-                campaign.total_calls_made += 1
-            else:
-                total_blocked += 1
-                block_reasons["VAPI_FAILED"] += 1
-
-        campaign.updated_at = datetime.now(timezone.utc)
-        await self.db.flush()
+        except Exception:
+            campaign.status = "ACTIVE"
+            await self.db.flush()
+            raise
 
         return {
             "total_attempted": total_attempted,

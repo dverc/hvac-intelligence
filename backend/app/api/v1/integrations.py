@@ -197,6 +197,7 @@ async def jobber_disconnect(
 async def jobber_sync(
     body: JobberSyncBody,
     org_id: uuid.UUID = Depends(get_dashboard_org_id),
+    db: AsyncSession = Depends(get_db),
     jobber: JobberService = Depends(get_jobber_service),
 ) -> dict[str, int]:
     clients_synced = 0
@@ -216,6 +217,7 @@ async def jobber_sync(
 
         await jobber.mark_sync_completed(org_id)
     except HTTPException as exc:
+        await db.rollback()
         if exc.status_code == 401:
             return JSONResponse(
                 status_code=401,
@@ -234,6 +236,7 @@ async def jobber_sync(
             content={"error": f"Jobber sync failed: {message}"},
         )
     except Exception as exc:
+        await db.rollback()
         logger.exception("Jobber sync failed: %s", exc)
         message = str(exc)
         if "THROTTLED" in message.upper() or "throttled" in message.lower():

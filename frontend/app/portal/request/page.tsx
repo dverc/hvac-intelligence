@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
 
 import { ApiError, portalRequestService } from "@/lib/api";
 import { formatPortalPhoneInput } from "@/lib/portal-format";
@@ -22,7 +22,7 @@ const TIME_WINDOWS = [
   "Evening (5PM-8PM)",
 ] as const;
 
-export default function PortalRequestPage() {
+function PortalRequestPageContent() {
   const searchParams = useSearchParams();
   const [phone, setPhone] = useState(searchParams.get("phone") ?? "");
   const [name, setName] = useState("");
@@ -197,5 +197,19 @@ export default function PortalRequestPage() {
         </button>
       </form>
     </div>
+  );
+}
+
+export default function PortalRequestPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <span className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+        </div>
+      }
+    >
+      <PortalRequestPageContent />
+    </Suspense>
   );
 }

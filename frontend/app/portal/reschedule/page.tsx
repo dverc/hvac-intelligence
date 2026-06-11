@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 
 import {
   ApiError,
@@ -18,7 +18,7 @@ const TIME_WINDOWS = [
   "Evening (5PM-8PM)",
 ] as const;
 
-export default function PortalReschedulePage() {
+function PortalReschedulePageContent() {
   const searchParams = useSearchParams();
   const customerId = searchParams.get("customer_id") ?? "";
   const appointmentId = searchParams.get("appointment_id") ?? "";
@@ -192,5 +192,19 @@ export default function PortalReschedulePage() {
         </button>
       </form>
     </div>
+  );
+}
+
+export default function PortalReschedulePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <span className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+        </div>
+      }
+    >
+      <PortalReschedulePageContent />
+    </Suspense>
   );
 }

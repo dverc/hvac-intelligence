@@ -73,7 +73,7 @@ class OutboundCampaign(Base):
             name="ck_outbound_campaigns_type",
         ),
         CheckConstraint(
-            "status IN ('DRAFT','ACTIVE','PAUSED','COMPLETED')",
+            "status IN ('DRAFT','ACTIVE','PAUSED','COMPLETED','RUNNING')",
             name="ck_outbound_campaigns_status",
         ),
         CheckConstraint(

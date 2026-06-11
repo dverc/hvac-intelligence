@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.tenant import get_fallback_dashboard_org_id
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
+from app.models.org_settings import OrgSettings
 from app.models.support_ticket import SupportTicket
 from app.schemas.portal import (
     PortalAppointmentOut,
@@ -25,7 +26,7 @@ from app.schemas.portal import (
 from app.services.customer_service import CustomerService, normalize_phone
 from app.services.ticket_service import TicketService
 
-PORTAL_TZ = ZoneInfo("America/Los_Angeles")
+DEFAULT_PORTAL_TZ = "America/Los_Angeles"
 
 ISSUE_TYPE_MAP: dict[str, str] = {
     "AC Not Cooling": "AC_FAILURE",
@@ -37,20 +38,20 @@ ISSUE_TYPE_MAP: dict[str, str] = {
 }
 
 
-def _format_dt_la(value: datetime | None) -> str | None:
+def _format_dt_in_tz(value: datetime | None, tz: ZoneInfo) -> str | None:
     if value is None:
         return None
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(PORTAL_TZ).isoformat()
+    return value.astimezone(tz).isoformat()
 
 
-def _serialize_appointment(job: DispatchJob) -> PortalAppointmentOut:
+def _serialize_appointment(job: DispatchJob, tz: ZoneInfo) -> PortalAppointmentOut:
     tech_name = job.technician.full_name if job.technician else None
     return PortalAppointmentOut(
         id=str(job.job_id),
-        scheduled_window_start=_format_dt_la(job.scheduled_window_start),
-        scheduled_window_end=_format_dt_la(job.scheduled_window_end),
+        scheduled_window_start=_format_dt_in_tz(job.scheduled_window_start, tz),
+        scheduled_window_end=_format_dt_in_tz(job.scheduled_window_end, tz),
         issue_type=job.issue_type,
         issue_description=job.issue_description,
         job_status=job.job_status,
@@ -72,9 +73,19 @@ class PortalService:
     def _org_id(self) -> uuid.UUID:
         return get_fallback_dashboard_org_id()
 
+    async def _get_org_timezone(self, org_id: uuid.UUID) -> ZoneInfo:
+        tz_name = (
+            await self.db.execute(
+                select(OrgSettings.timezone).where(OrgSettings.org_id == org_id)
+            )
+        ).scalar_one_or_none()
+        return ZoneInfo(tz_name or DEFAULT_PORTAL_TZ)
+
     async def _load_appointments(
         self, customer_id: uuid.UUID
     ) -> tuple[list[PortalAppointmentOut], list[PortalAppointmentOut]]:
+        org_id = self._org_id()
+        portal_tz = await self._get_org_timezone(org_id)
         now = datetime.now(timezone.utc)
         stmt = (
             select(DispatchJob)
@@ -98,8 +109,8 @@ class PortalService:
         )[:10]
 
         return (
-            [_serialize_appointment(j) for j in upcoming],
-            [_serialize_appointment(j) for j in past],
+            [_serialize_appointment(j, portal_tz) for j in upcoming],
+            [_serialize_appointment(j, portal_tz) for j in past],
         )
 
     async def identify(self, phone: str) -> PortalIdentifyResponse:
@@ -230,11 +241,12 @@ class PortalService:
         ):
             raise ValueError("Appointment not found")
 
+        portal_tz = await self._get_org_timezone(org_id)
         subject = f"Portal reschedule request for {job.job_number}"
         extra = (
             f"Appointment: {job.job_number}\n"
-            f"Current window start: {_format_dt_la(job.scheduled_window_start)}\n"
-            f"Current window end: {_format_dt_la(job.scheduled_window_end)}"
+            f"Current window start: {_format_dt_in_tz(job.scheduled_window_start, portal_tz)}\n"
+            f"Current window end: {_format_dt_in_tz(job.scheduled_window_end, portal_tz)}"
         )
         if body.reason:
             extra += f"\nReason: {body.reason}"

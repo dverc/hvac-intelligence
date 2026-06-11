@@ -13,9 +13,8 @@ from app.core.database import get_session_factory
 from app.models.organization import Organization
 from app.models.outbound_campaign import OutboundCampaign
 from app.pipeline.celery_app import celery_app
-from app.schemas.organization import OrganizationSettings
-from app.services.compliance_service import check_calling_hours
-from app.services.outbound_service import OutboundService
+from app.services.compliance_service import check_calling_hours, fetch_org_settings
+from app.services.outbound_service import OutboundService, org_outbound_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -92,14 +91,16 @@ async def _launch_active_campaigns_async() -> dict:
             org = await session.get(Organization, campaign.org_id)
             if org is None:
                 continue
-            settings = OrganizationSettings.model_validate(org.settings or {})
-            if not settings.outbound_enabled:
+            if not await org_outbound_enabled(session, org):
                 continue
+            org_settings = await fetch_org_settings(session, campaign.org_id)
+            org_timezone = org_settings.timezone if org_settings else None
             phone = org.business_phone or ""
             if phone and not check_calling_hours(
                 phone,
                 campaign.calling_hours_start,
                 campaign.calling_hours_end,
+                org_timezone=org_timezone,
             ):
                 skipped_hours += 1
                 continue

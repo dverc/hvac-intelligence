@@ -91,11 +91,16 @@ export default function OutboundPage() {
   }, [form.disclosure_style]);
 
   async function handlePreview() {
-    const res = await previewEligibleCustomers(
-      form.churn_score_threshold,
-      form.max_attempts,
-    );
-    setPreviewCount(res.eligible_count);
+    setError(null);
+    try {
+      const res = await previewEligibleCustomers(
+        form.churn_score_threshold,
+        form.max_attempts,
+      );
+      setPreviewCount(res.eligible_count);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to preview eligible customers");
+    }
   }
 
   async function handleCreate() {
@@ -119,13 +124,23 @@ export default function OutboundPage() {
   }
 
   async function handleStatusChange(campaignId: string, status: string) {
-    await updateOutboundCampaignStatus(campaignId, status);
-    await load();
+    setError(null);
+    try {
+      await updateOutboundCampaignStatus(campaignId, status);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to update campaign status");
+    }
   }
 
   async function handleExecute(campaignId: string) {
-    await executeOutboundCampaign(campaignId);
-    await load();
+    setError(null);
+    try {
+      await executeOutboundCampaign(campaignId);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to execute campaign");
+    }
   }
 
   return (
@@ -342,13 +357,15 @@ export default function OutboundPage() {
                             Pause
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => void handleExecute(c.campaign_id)}
-                          className="text-xs text-indigo-600 hover:underline"
-                        >
-                          Execute
-                        </button>
+                        {c.status === "ACTIVE" && (
+                          <button
+                            type="button"
+                            onClick={() => void handleExecute(c.campaign_id)}
+                            className="text-xs text-indigo-600 hover:underline"
+                          >
+                            Execute
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

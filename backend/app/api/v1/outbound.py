@@ -20,7 +20,11 @@ from app.schemas.outbound import (
     EligibilityOut,
     EligibilityPreview,
 )
-from app.services.compliance_service import ComplianceService, get_disclosure_text, get_org_display_name
+from app.services.compliance_service import (
+    ComplianceService,
+    get_disclosure_text,
+    get_org_display_name_from_db,
+)
 from app.services.outbound_service import OutboundService
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -154,6 +158,17 @@ async def execute_campaign(
     if campaign is None or campaign.org_id != org_id:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
+    if campaign.status == "RUNNING":
+        raise HTTPException(status_code=409, detail="Campaign is already running")
+    if campaign.status != "ACTIVE":
+        raise HTTPException(
+            status_code=400,
+            detail="Campaign must be ACTIVE to execute",
+        )
+
+    campaign.status = "RUNNING"
+    await db.flush()
+
     from app.tasks.celery_tasks import execute_outbound_campaign
 
     execute_outbound_campaign.delay(str(campaign_id))
@@ -246,6 +261,6 @@ async def disclosure_preview(
     org = await db.get(Organization, org_id)
     if org is None:
         raise HTTPException(status_code=404, detail="Organization not found")
-    display_name = get_org_display_name(org)
+    display_name = await get_org_display_name_from_db(db, org)
     text = get_disclosure_text(display_name, disclosure_style)
     return {"display_name": display_name, "disclosure_text": text}
