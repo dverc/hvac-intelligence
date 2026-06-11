@@ -22,6 +22,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
   const apiKeyError = getApiKeyConfigError();
   const orgName = getOrgName();
@@ -73,6 +74,7 @@ export default function DashboardLayout({
         }
         console.log("[dashboard layout] /auth/me response:", user);
         setUserEmail(user.email);
+        setIsAdmin(user.role === "admin");
       } catch (err) {
         if (cancelled) {
           return;
@@ -116,7 +118,7 @@ export default function DashboardLayout({
     <div className="flex min-h-screen">
       <aside className="hidden w-56 shrink-0 flex-col border-r border-gray-200 bg-white dark:border-slate-800 dark:bg-slate-950 md:flex">
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <DashboardNav />
+          <DashboardNav isAdmin={isAdmin} />
         </div>
         <div className="border-t border-gray-200 p-4 dark:border-slate-800">
           {userEmail && (

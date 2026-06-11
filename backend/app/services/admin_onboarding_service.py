@@ -1,0 +1,448 @@
+from __future__ import annotations
+
+import re
+import secrets
+import uuid
+from datetime import date
+
+from passlib.context import CryptContext
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.customer import Customer
+from app.models.org_settings import OrgSettings
+from app.models.organization import Organization
+from app.models.technician import Technician
+from app.models.user import User
+from app.schemas.admin import (
+    AdminOrganizationCreate,
+    AdminOrganizationCreateResponse,
+    AdminOrganizationDetail,
+    AdminOrganizationListItem,
+    AdminOrganizationUpdate,
+    AdminTechnicianCreate,
+    AdminTechnicianOut,
+    AdminUserCreate,
+    AdminUserCreateResponse,
+    AdminUserOut,
+    OnboardingProgressOut,
+    OnboardingProgressUpdate,
+    OrgSettingsOut,
+    ProvisionResponse,
+)
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def _slugify(name: str) -> str:
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    return (slug.strip("-") or "org")[:100]
+
+
+def _org_status(org: Organization, settings: OrgSettings | None) -> str:
+    if not org.is_active:
+        return "INACTIVE"
+    if settings is None or not settings.onboarding_completed:
+        return "TRIAL"
+    return "ACTIVE"
+
+
+def _settings_out(settings: OrgSettings) -> OrgSettingsOut:
+    return OrgSettingsOut.model_validate(settings)
+
+
+class AdminOnboardingService:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def _unique_slug(self, base_slug: str) -> str:
+        slug = base_slug
+        suffix = 2
+        while True:
+            existing = (
+                await self.db.execute(
+                    select(Organization).where(Organization.slug == slug)
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                return slug
+            slug = f"{base_slug}-{suffix}"[:100]
+            suffix += 1
+
+    async def _get_settings(self, org_id: uuid.UUID) -> OrgSettings | None:
+        return (
+            await self.db.execute(
+                select(OrgSettings).where(OrgSettings.org_id == org_id)
+            )
+        ).scalar_one_or_none()
+
+    async def _ensure_settings(self, org: Organization) -> OrgSettings:
+        settings = await self._get_settings(org.org_id)
+        if settings is None:
+            settings = OrgSettings(
+                org_id=org.org_id,
+                display_name=org.org_name,
+                phone_display=org.business_phone,
+            )
+            self.db.add(settings)
+            await self.db.flush()
+        return settings
+
+    async def _user_count(self, org_id: uuid.UUID) -> int:
+        return int(
+            (
+                await self.db.execute(
+                    select(func.count(User.id)).where(User.org_id == str(org_id))
+                )
+            ).scalar_one()
+            or 0
+        )
+
+    async def _technician_count(self, org_id: uuid.UUID) -> int:
+        return int(
+            (
+                await self.db.execute(
+                    select(func.count(Technician.technician_id)).where(
+                        Technician.org_id == org_id
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+
+    async def list_organizations(self) -> list[AdminOrganizationListItem]:
+        orgs = (
+            await self.db.execute(select(Organization).order_by(Organization.org_name))
+        ).scalars().all()
+        items: list[AdminOrganizationListItem] = []
+        for org in orgs:
+            settings = await self._get_settings(org.org_id)
+            items.append(
+                AdminOrganizationListItem(
+                    org_id=org.org_id,
+                    org_name=org.org_name,
+                    slug=org.slug,
+                    industry=org.industry,
+                    plan_tier=org.plan_tier,
+                    is_active=org.is_active,
+                    status=_org_status(org, settings),
+                    user_count=await self._user_count(org.org_id),
+                    technician_count=await self._technician_count(org.org_id),
+                    onboarding_completed=settings.onboarding_completed
+                    if settings
+                    else False,
+                    onboarding_step=settings.onboarding_step if settings else 0,
+                    display_name=settings.display_name if settings else org.org_name,
+                    created_at=org.created_at,
+                )
+            )
+        return items
+
+    async def create_organization(
+        self, body: AdminOrganizationCreate
+    ) -> AdminOrganizationCreateResponse:
+        slug = await self._unique_slug(_slugify(body.company_name))
+        org = Organization(
+            org_name=body.company_name.strip(),
+            slug=slug,
+            industry=body.industry,
+            plan_tier=body.plan_tier,
+            is_active=True,
+            settings={"timezone": "America/Los_Angeles"},
+        )
+        self.db.add(org)
+        await self.db.flush()
+
+        settings = OrgSettings(
+            org_id=org.org_id,
+            display_name=body.company_name.strip(),
+            onboarding_step=0,
+            onboarding_completed=False,
+        )
+        self.db.add(settings)
+        await self.db.flush()
+
+        temp_password: str | None = None
+        admin_user_id: str | None = None
+        email = body.admin_email.strip().lower()
+        if email:
+            temp_password = secrets.token_urlsafe(12)
+            user = User(
+                org_id=str(org.org_id),
+                email=email,
+                hashed_password=pwd_context.hash(temp_password),
+                role="admin",
+            )
+            self.db.add(user)
+            await self.db.flush()
+            admin_user_id = str(user.id)
+
+        await self.db.refresh(settings)
+        return AdminOrganizationCreateResponse(
+            org_id=org.org_id,
+            org_name=org.org_name,
+            slug=org.slug,
+            settings=_settings_out(settings),
+            admin_user_id=admin_user_id,
+            temporary_password=temp_password,
+        )
+
+    async def get_organization(self, org_id: uuid.UUID) -> AdminOrganizationDetail:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            raise ValueError("Organization not found")
+        settings = await self._get_settings(org_id)
+        return AdminOrganizationDetail(
+            org_id=org.org_id,
+            org_name=org.org_name,
+            slug=org.slug,
+            industry=org.industry,
+            business_phone=org.business_phone,
+            plan_tier=org.plan_tier,
+            is_active=org.is_active,
+            status=_org_status(org, settings),
+            user_count=await self._user_count(org_id),
+            technician_count=await self._technician_count(org_id),
+            settings=_settings_out(settings) if settings else None,
+            created_at=org.created_at,
+            updated_at=org.updated_at,
+        )
+
+    async def update_organization(
+        self, org_id: uuid.UUID, body: AdminOrganizationUpdate
+    ) -> AdminOrganizationDetail:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            raise ValueError("Organization not found")
+        settings = await self._ensure_settings(org)
+
+        if body.org_name is not None:
+            org.org_name = body.org_name
+        if body.industry is not None:
+            org.industry = body.industry
+        if body.plan_tier is not None:
+            org.plan_tier = body.plan_tier
+        if body.is_active is not None:
+            org.is_active = body.is_active
+        if body.business_phone is not None:
+            org.business_phone = body.business_phone
+
+        for field in (
+            "display_name",
+            "phone_display",
+            "address_line1",
+            "city",
+            "state",
+            "zip",
+            "agent_greeting",
+            "agent_name",
+            "business_hours_start",
+            "business_hours_end",
+            "timezone",
+            "vapi_assistant_id",
+            "vapi_phone_number_id",
+            "vapi_phone_number",
+            "outbound_enabled",
+            "outbound_disclosure_style",
+            "max_outbound_attempts",
+            "onboarding_step",
+        ):
+            value = getattr(body, field)
+            if value is not None:
+                setattr(settings, field, value)
+
+        if body.display_name is not None:
+            org.agent_name = settings.agent_name
+
+        if body.vapi_assistant_id is not None:
+            org.vapi_assistant_id = body.vapi_assistant_id
+        if body.vapi_phone_number_id is not None:
+            org.vapi_phone_number_id = body.vapi_phone_number_id
+        if body.vapi_phone_number is not None:
+            org.vapi_phone_number = body.vapi_phone_number
+
+        await self.db.flush()
+        return await self.get_organization(org_id)
+
+    async def create_user(
+        self, org_id: uuid.UUID, body: AdminUserCreate
+    ) -> AdminUserCreateResponse:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            raise ValueError("Organization not found")
+
+        email = body.email.strip().lower()
+        existing = (
+            await self.db.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise ValueError("Email already registered")
+
+        temp_password = secrets.token_urlsafe(12)
+        user = User(
+            org_id=str(org_id),
+            email=email,
+            hashed_password=pwd_context.hash(temp_password),
+            role=body.role,
+        )
+        self.db.add(user)
+        await self.db.flush()
+        return AdminUserCreateResponse(
+            user_id=str(user.id),
+            email=user.email,
+            role=user.role,
+            org_id=user.org_id,
+            temporary_password=temp_password,
+        )
+
+    async def list_users(self, org_id: uuid.UUID) -> list[AdminUserOut]:
+        users = (
+            await self.db.execute(
+                select(User)
+                .where(User.org_id == str(org_id))
+                .order_by(User.created_at.desc())
+            )
+        ).scalars().all()
+        return [
+            AdminUserOut(
+                user_id=str(user.id),
+                email=user.email,
+                role=user.role,
+                org_id=user.org_id,
+                is_active=user.is_active,
+                created_at=user.created_at,
+                last_login_at=user.last_login_at,
+            )
+            for user in users
+        ]
+
+    async def create_technician(
+        self, org_id: uuid.UUID, body: AdminTechnicianCreate
+    ) -> AdminTechnicianOut:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            raise ValueError("Organization not found")
+
+        count = await self._technician_count(org_id)
+        employee_number = f"TECH-{count + 1:03d}"
+        tech = Technician(
+            org_id=org_id,
+            employee_number=employee_number,
+            full_name=body.full_name.strip(),
+            phone=body.phone,
+            email=body.email,
+            hire_date=date.today(),
+            employment_status="ACTIVE",
+            skills=[body.specialty],
+        )
+        self.db.add(tech)
+        await self.db.flush()
+        return AdminTechnicianOut(
+            technician_id=tech.technician_id,
+            full_name=tech.full_name,
+            phone=tech.phone,
+            email=tech.email,
+            specialty=body.specialty,
+            employment_status=tech.employment_status,
+        )
+
+    async def list_technicians(self, org_id: uuid.UUID) -> list[AdminTechnicianOut]:
+        techs = (
+            await self.db.execute(
+                select(Technician)
+                .where(Technician.org_id == org_id)
+                .order_by(Technician.full_name)
+            )
+        ).scalars().all()
+        return [
+            AdminTechnicianOut(
+                technician_id=tech.technician_id,
+                full_name=tech.full_name,
+                phone=tech.phone,
+                email=tech.email,
+                specialty=(tech.skills or ["General"])[0],
+                employment_status=tech.employment_status,
+            )
+            for tech in techs
+        ]
+
+    async def get_onboarding(self, org_id: uuid.UUID) -> OnboardingProgressOut:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            raise ValueError("Organization not found")
+        settings = await self._ensure_settings(org)
+        return OnboardingProgressOut(
+            org_id=org_id,
+            onboarding_completed=settings.onboarding_completed,
+            onboarding_step=settings.onboarding_step,
+            display_name=settings.display_name,
+        )
+
+    async def update_onboarding(
+        self, org_id: uuid.UUID, body: OnboardingProgressUpdate
+    ) -> OnboardingProgressOut:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            raise ValueError("Organization not found")
+        settings = await self._ensure_settings(org)
+        if body.onboarding_step is not None:
+            settings.onboarding_step = body.onboarding_step
+        if body.onboarding_completed is not None:
+            settings.onboarding_completed = body.onboarding_completed
+            if body.onboarding_completed:
+                settings.onboarding_step = max(settings.onboarding_step, 5)
+        await self.db.flush()
+        return await self.get_onboarding(org_id)
+
+    async def provision(self, org_id: uuid.UUID) -> ProvisionResponse:
+        org = await self.db.get(Organization, org_id)
+        if org is None:
+            raise ValueError("Organization not found")
+        settings = await self._ensure_settings(org)
+        settings.onboarding_step = max(settings.onboarding_step, 1)
+        if not settings.display_name:
+            settings.display_name = org.org_name
+        if not settings.agent_greeting:
+            name = settings.display_name or org.org_name
+            settings.agent_greeting = (
+                f"Hi, thanks for calling {name}! "
+                "This is an AI virtual assistant. How can I help you today?"
+            )
+
+        customer_count = int(
+            (
+                await self.db.execute(
+                    select(func.count(Customer.customer_id)).where(
+                        Customer.org_id == org_id
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+        example_created = False
+        if customer_count == 0:
+            self.db.add(
+                Customer(
+                    org_id=org_id,
+                    full_name="Example Customer",
+                    phone_primary="+15550100001",
+                    email="example@customer.local",
+                    address_line1="123 Main St",
+                    city="Demo City",
+                    state="CA",
+                    zip="92612",
+                    customer_since=date.today(),
+                    account_status="ACTIVE",
+                    contract_type="RESIDENTIAL_OTC",
+                )
+            )
+            example_created = True
+
+        await self.db.flush()
+        await self.db.refresh(settings)
+        return ProvisionResponse(
+            org_id=org_id,
+            settings=_settings_out(settings),
+            example_customer_created=example_created,
+        )

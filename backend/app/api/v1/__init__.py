@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from app.core.auth_jwt import get_current_user
 
 from app.api.v1 import (
+    admin,
     analytics,
     audit,
     auth,
@@ -25,6 +26,7 @@ _jwt_auth = [Depends(get_current_user)]
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(admin.router, dependencies=_jwt_auth)
 api_router.include_router(organizations.router, dependencies=_jwt_auth)
 api_router.include_router(onboarding.router, dependencies=_jwt_auth)
 api_router.include_router(calls.router, dependencies=_jwt_auth)

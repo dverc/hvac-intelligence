@@ -681,6 +681,202 @@ export function updateOrganizationSettings(
   });
 }
 
+// ── Admin onboarding (multi-tenant) ─────────────────────────────────────────
+
+export type OrgSettingsRecord = {
+  setting_id: string;
+  org_id: string;
+  display_name: string | null;
+  phone_display: string | null;
+  address_line1: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  agent_greeting: string | null;
+  agent_name: string;
+  business_hours_start: number;
+  business_hours_end: number;
+  timezone: string;
+  vapi_assistant_id: string | null;
+  vapi_phone_number_id: string | null;
+  vapi_phone_number: string | null;
+  outbound_enabled: boolean;
+  outbound_disclosure_style: string;
+  max_outbound_attempts: number;
+  onboarding_completed: boolean;
+  onboarding_step: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AdminOrganizationListItem = {
+  org_id: string;
+  org_name: string;
+  slug: string;
+  industry: string;
+  plan_tier: string;
+  is_active: boolean;
+  status: "ACTIVE" | "TRIAL" | "INACTIVE";
+  user_count: number;
+  technician_count: number;
+  onboarding_completed: boolean;
+  onboarding_step: number;
+  display_name: string | null;
+  created_at: string;
+};
+
+export type AdminOrganizationDetail = {
+  org_id: string;
+  org_name: string;
+  slug: string;
+  industry: string;
+  business_phone: string | null;
+  plan_tier: string;
+  is_active: boolean;
+  status: "ACTIVE" | "TRIAL" | "INACTIVE";
+  user_count: number;
+  technician_count: number;
+  settings: OrgSettingsRecord | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function listAdminOrganizations() {
+  return apiGet<AdminOrganizationListItem[]>("/api/v1/admin/organizations");
+}
+
+export function createAdminOrganization(payload: {
+  company_name: string;
+  admin_email: string;
+  admin_first_name?: string;
+  admin_last_name?: string;
+  industry?: string;
+  plan_tier?: string;
+}) {
+  return apiPostJson<{
+    org_id: string;
+    org_name: string;
+    slug: string;
+    settings: OrgSettingsRecord;
+    admin_user_id: string | null;
+    temporary_password: string | null;
+  }>("/api/v1/admin/organizations", payload);
+}
+
+export function getAdminOrganization(orgId: string) {
+  return apiGet<AdminOrganizationDetail>(`/api/v1/admin/organizations/${orgId}`);
+}
+
+export function updateAdminOrganization(
+  orgId: string,
+  payload: Record<string, unknown>,
+) {
+  return apiPatchJson<AdminOrganizationDetail>(
+    `/api/v1/admin/organizations/${orgId}`,
+    payload,
+  );
+}
+
+export function createAdminOrgUser(
+  orgId: string,
+  payload: {
+    email: string;
+    first_name?: string;
+    last_name?: string;
+    role?: string;
+  },
+) {
+  return apiPostJson<{
+    user_id: string;
+    email: string;
+    role: string;
+    org_id: string;
+    temporary_password: string;
+  }>(`/api/v1/admin/organizations/${orgId}/users`, payload);
+}
+
+export function listAdminOrgUsers(orgId: string) {
+  return apiGet<
+    {
+      user_id: string;
+      email: string;
+      role: string;
+      org_id: string;
+      is_active: boolean;
+      created_at: string;
+      last_login_at: string | null;
+    }[]
+  >(`/api/v1/admin/organizations/${orgId}/users`);
+}
+
+export type AdminTechnicianRecord = {
+  technician_id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  specialty: string | null;
+  employment_status: string;
+};
+
+export function listAdminOrgTechnicians(orgId: string) {
+  return apiGet<AdminTechnicianRecord[]>(
+    `/api/v1/admin/organizations/${orgId}/technicians`,
+  );
+}
+
+export function createAdminOrgTechnician(
+  orgId: string,
+  payload: {
+    full_name: string;
+    phone?: string;
+    email?: string;
+    specialty?: string;
+  },
+) {
+  return apiPostJson<AdminTechnicianRecord>(
+    `/api/v1/admin/organizations/${orgId}/technicians`,
+    payload,
+  );
+}
+
+export function getAdminOnboarding(orgId: string) {
+  return apiGet<{
+    org_id: string;
+    onboarding_completed: boolean;
+    onboarding_step: number;
+    display_name: string | null;
+  }>(`/api/v1/admin/organizations/${orgId}/onboarding`);
+}
+
+export function updateAdminOnboarding(
+  orgId: string,
+  payload: { onboarding_step?: number; onboarding_completed?: boolean },
+) {
+  return apiPatchJson<{
+    org_id: string;
+    onboarding_completed: boolean;
+    onboarding_step: number;
+    display_name: string | null;
+  }>(`/api/v1/admin/organizations/${orgId}/onboarding`, payload);
+}
+
+export function provisionAdminOrganization(orgId: string) {
+  return apiPostJson<{
+    org_id: string;
+    settings: OrgSettingsRecord;
+    example_customer_created: boolean;
+  }>(`/api/v1/admin/organizations/${orgId}/provision`, {});
+}
+
+export async function checkBackendHealth(): Promise<boolean> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/health`, { cache: "no-store" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export type SystemHealthResponse = {
   status: "healthy" | "degraded" | "unhealthy";
   timestamp: string;

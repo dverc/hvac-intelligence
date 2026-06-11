@@ -9,6 +9,7 @@ from app.models.feature_store import FeatureStore
 from app.models.ground_truth_label import GroundTruthLabel
 from app.models.google_calendar_token import GoogleCalendarToken
 from app.models.jobber_token import JobberToken
+from app.models.org_settings import OrgSettings
 from app.models.organization import Organization
 from app.models.outbound_campaign import (
     ConsentRecord,
@@ -34,6 +35,7 @@ __all__ = [
     "GroundTruthLabel",
     "GoogleCalendarToken",
     "JobberToken",
+    "OrgSettings",
     "Organization",
     "ConsentRecord",
     "OutboundCampaign",
