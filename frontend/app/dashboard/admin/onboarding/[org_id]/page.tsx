@@ -96,6 +96,16 @@ export default function AdminOnboardingWizardPage() {
     return `Hi, thanks for calling ${companyName}! How can I help you today?`;
   }, [agentForm.agent_greeting, companyName]);
 
+  function getStepValidation(currentStep: number): string | null {
+    if (currentStep === 1 && !companyForm.display_name.trim()) {
+      return "Company name is required before continuing.";
+    }
+    return null;
+  }
+
+  const stepValidation = getStepValidation(step);
+  const canAdvance = stepValidation === null;
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -141,54 +151,82 @@ export default function AdminOnboardingWizardPage() {
     void load();
   }, [load]);
 
-  async function saveStep(nextStep: number) {
+  async function persistStepData(currentStep: number) {
+    if (currentStep === 1) {
+      await updateAdminOrganization(orgId, {
+        display_name: companyForm.display_name,
+        org_name: companyForm.display_name,
+        address_line1: companyForm.address_line1 || null,
+        city: companyForm.city || null,
+        state: companyForm.state || null,
+        zip: companyForm.zip || null,
+        phone_display: companyForm.phone_display || null,
+        business_phone: companyForm.phone_display || null,
+        timezone: companyForm.timezone,
+      });
+      if ((org?.settings?.onboarding_step ?? 0) === 0) {
+        await provisionAdminOrganization(orgId);
+      }
+    } else if (currentStep === 2) {
+      await updateAdminOrganization(orgId, {
+        agent_greeting: agentForm.agent_greeting || null,
+        business_hours_start: agentForm.business_hours_start,
+        business_hours_end: agentForm.business_hours_end,
+        outbound_enabled: agentForm.outbound_enabled,
+      });
+    } else if (currentStep === 3) {
+      await updateAdminOrganization(orgId, {
+        vapi_assistant_id: vapiForm.vapi_assistant_id || null,
+        vapi_phone_number_id: vapiForm.vapi_phone_number_id || null,
+        vapi_phone_number: vapiForm.vapi_phone_number || null,
+      });
+    }
+  }
+
+  async function refreshOrg() {
+    const detail = await getAdminOrganization(orgId);
+    setOrg(detail);
+  }
+
+  async function saveAndAdvance() {
+    const validation = getStepValidation(step);
+    if (validation) {
+      setError(validation);
+      setMessage(null);
+      return;
+    }
+    if (step >= 5) return;
+
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
-      if (step === 1) {
-        await updateAdminOrganization(orgId, {
-          display_name: companyForm.display_name,
-          org_name: companyForm.display_name,
-          address_line1: companyForm.address_line1 || null,
-          city: companyForm.city || null,
-          state: companyForm.state || null,
-          zip: companyForm.zip || null,
-          phone_display: companyForm.phone_display || null,
-          business_phone: companyForm.phone_display || null,
-          timezone: companyForm.timezone,
-          onboarding_step: Math.max(nextStep - 1, 1),
-        });
-        await provisionAdminOrganization(orgId);
-      } else if (step === 2) {
-        await updateAdminOrganization(orgId, {
-          agent_greeting: agentForm.agent_greeting || null,
-          business_hours_start: agentForm.business_hours_start,
-          business_hours_end: agentForm.business_hours_end,
-          outbound_enabled: agentForm.outbound_enabled,
-          onboarding_step: Math.max(nextStep - 1, 2),
-        });
-      } else if (step === 3) {
-        await updateAdminOrganization(orgId, {
-          vapi_assistant_id: vapiForm.vapi_assistant_id || null,
-          vapi_phone_number_id: vapiForm.vapi_phone_number_id || null,
-          vapi_phone_number: vapiForm.vapi_phone_number || null,
-          onboarding_step: Math.max(nextStep - 1, 3),
-        });
-      } else if (step === 4) {
-        await updateAdminOnboarding(orgId, { onboarding_step: 4 });
-      } else if (step === 5) {
-        await updateAdminOnboarding(orgId, {
-          onboarding_completed: true,
-          onboarding_step: 5,
-        });
-      }
-      await updateAdminOnboarding(orgId, { onboarding_step: Math.max(nextStep - 1, step) });
+      await persistStepData(step);
+      const nextStep = step + 1;
+      await updateAdminOnboarding(orgId, { onboarding_step: nextStep });
       setStep(nextStep);
       setMessage("Saved.");
-      await load();
+      await refreshOrg();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleMarkComplete() {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await updateAdminOnboarding(orgId, {
+        onboarding_completed: true,
+        onboarding_step: 5,
+      });
+      setMessage("Onboarding marked complete.");
+      await refreshOrg();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to complete onboarding");
     } finally {
       setSaving(false);
     }
@@ -600,34 +638,41 @@ export default function AdminOnboardingWizardPage() {
           >
             Back
           </button>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => void saveStep(step)}
-              className="rounded-lg border px-4 py-2 text-sm dark:border-slate-600"
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-            {step < 5 ? (
-              <button
-                type="button"
-                disabled={saving || (step === 1 && !companyForm.display_name)}
-                onClick={() => void saveStep(step + 1)}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              >
-                Next
-              </button>
-            ) : (
+          <div className="flex flex-col items-end gap-2">
+            {stepValidation && step < 5 && (
+              <p className="text-sm text-amber-700 dark:text-amber-300">{stepValidation}</p>
+            )}
+            <div className="flex gap-2">
               <button
                 type="button"
                 disabled={saving}
-                onClick={() => void saveStep(5)}
-                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                onClick={() => void saveAndAdvance()}
+                className="rounded-lg border px-4 py-2 text-sm dark:border-slate-600"
               >
-                Mark as Complete
+                {saving ? "Saving…" : "Save"}
               </button>
-            )}
+              {step < 5 ? (
+                canAdvance && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void saveAndAdvance()}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                )
+              ) : (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void handleMarkComplete()}
+                  className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  Mark as Complete
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </section>
