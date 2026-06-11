@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import date, datetime, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from app.api.deps import get_db, get_google_calendar_service, get_jobber_service
@@ -203,14 +204,49 @@ async def jobber_sync(
     jobs_synced = 0
     sync_type = body.sync_type.lower()
 
-    if sync_type in ("all", "clients"):
-        clients_synced = await jobber.sync_clients_to_customers(org_id)
-    if sync_type in ("all", "users"):
-        users_synced = await jobber.sync_users_to_technicians(org_id)
-    if sync_type in ("all", "jobs"):
-        jobs_synced = await jobber.sync_jobs_to_dispatch(org_id, body.days_ahead)
+    try:
+        if sync_type in ("all", "clients"):
+            clients_synced = await jobber.sync_clients_to_customers(org_id)
+        if sync_type in ("all", "users"):
+            if sync_type == "all":
+                await asyncio.sleep(1)
+            users_synced = await jobber.sync_users_to_technicians(org_id)
+        if sync_type in ("all", "jobs"):
+            jobs_synced = await jobber.sync_jobs_to_dispatch(org_id, body.days_ahead)
 
-    await jobber.mark_sync_completed(org_id)
+        await jobber.mark_sync_completed(org_id)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Jobber token expired. Please reconnect."},
+            )
+        message = str(exc.detail)
+        if "THROTTLED" in message.upper() or "throttled" in message.lower():
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Jobber rate limit hit. Please wait 30 seconds and try again.",
+                },
+            )
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Jobber sync failed: {message}"},
+        )
+    except Exception as exc:
+        logger.exception("Jobber sync failed: %s", exc)
+        message = str(exc)
+        if "THROTTLED" in message.upper() or "throttled" in message.lower():
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Jobber rate limit hit. Please wait 30 seconds and try again.",
+                },
+            )
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Jobber sync failed: {message}"},
+        )
 
     return {
         "clients_synced": clients_synced,

@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -196,7 +197,12 @@ class JobberService:
                 json={"query": query, "variables": variables or {}},
                 headers=self._graphql_headers(access_token),
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 401:
+                    raise HTTPException(status_code=401, detail="Jobber API unauthorized") from exc
+                raise
             payload = response.json()
 
         if payload.get("errors"):
