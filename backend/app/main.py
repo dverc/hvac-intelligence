@@ -49,12 +49,17 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(SlowAPIMiddleware)
+_cors_origins = {
+    settings.FRONTEND_BASE_URL.rstrip("/"),
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+}
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=sorted(_cors_origins),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],
 )
 
 
@@ -82,8 +87,31 @@ async def request_context_middleware(request: Request, call_next: Callable) -> R
 
 @app.get("/health")
 @limiter.exempt
-async def health() -> dict[str, str]:
-    return {"status": "ok", "service": settings.APP_NAME, "version": settings.APP_VERSION}
+async def health() -> JSONResponse:
+    from sqlalchemy import text
+
+    from app.core.database import get_engine
+
+    try:
+        async with get_engine().connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "service": settings.APP_NAME,
+                "version": settings.APP_VERSION,
+                "detail": "database unavailable",
+            },
+        )
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "service": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+        }
+    )
 
 
 app.include_router(vapi_router)

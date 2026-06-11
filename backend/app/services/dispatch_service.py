@@ -179,6 +179,8 @@ class DispatchService:
             }
 
         window_start, window_end = parsed.to_datetimes(tz_name)
+        window_start = window_start.astimezone(timezone.utc)
+        window_end = window_end.astimezone(timezone.utc)
 
         job_number = _generate_job_number()
         for _ in range(5):
@@ -300,6 +302,7 @@ class DispatchService:
                     parsed.slot_date,
                     parsed.start_time,
                     parsed.end_time,
+                    exclude_job_id=job.job_id,
                 )
                 if not available:
                     return {
@@ -308,8 +311,8 @@ class DispatchService:
                         "message": reason,
                     }
             window_start, window_end = parsed.to_datetimes(tz_name)
-            job.scheduled_window_start = window_start
-            job.scheduled_window_end = window_end
+            job.scheduled_window_start = window_start.astimezone(timezone.utc)
+            job.scheduled_window_end = window_end.astimezone(timezone.utc)
             changes.append(f"window updated to {args.preferred_window}")
 
         if args.service_address_override:

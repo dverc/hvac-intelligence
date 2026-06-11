@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DispatchBoard } from "@/components/DispatchBoard";
 import { getScheduledJobs, type ScheduledJob } from "@/lib/api";
+import { formatInOrgTimezone, orgLocalDateKey, orgLocalTimeParts } from "@/lib/datetime";
 
 type ViewMode = "list" | "calendar";
 
@@ -13,7 +14,7 @@ const HOUR_ROW_PX = 48;
 const CALENDAR_HOURS = CALENDAR_END_HOUR - CALENDAR_START_HOUR;
 
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return orgLocalDateKey(d);
 }
 
 function startOfWeekMonday(d: Date): Date {
@@ -42,11 +43,8 @@ function isSameDay(a: Date, b: Date): boolean {
 function formatWeekRange(weekStart: Date): string {
   const weekEnd = addDays(weekStart, 6);
   const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
-  const startStr = weekStart.toLocaleDateString(undefined, opts);
-  const endStr = weekEnd.toLocaleDateString(undefined, {
-    ...opts,
-    year: "numeric",
-  });
+  const startStr = formatInOrgTimezone(weekStart, opts);
+  const endStr = formatInOrgTimezone(weekEnd, { ...opts, year: "numeric" });
   return `${startStr} – ${endStr}`;
 }
 
@@ -81,13 +79,13 @@ function technicianColors(name?: string): string {
 
 function jobBlockPosition(job: ScheduledJob): { top: number; height: number } | null {
   if (!job.scheduled_window_start) return null;
-  const start = new Date(job.scheduled_window_start);
-  const end = job.scheduled_window_end
-    ? new Date(job.scheduled_window_end)
-    : new Date(start.getTime() + 60 * 60 * 1000);
+  const startParts = orgLocalTimeParts(job.scheduled_window_start);
+  const endParts = job.scheduled_window_end
+    ? orgLocalTimeParts(job.scheduled_window_end)
+    : { hours: startParts.hours + 1, minutes: startParts.minutes };
 
-  const startMinutes = start.getHours() * 60 + start.getMinutes();
-  const endMinutes = end.getHours() * 60 + end.getMinutes();
+  const startMinutes = startParts.hours * 60 + startParts.minutes;
+  const endMinutes = endParts.hours * 60 + endParts.minutes;
   const rangeStart = CALENDAR_START_HOUR * 60;
   const rangeEnd = CALENDAR_END_HOUR * 60;
   const totalMinutes = rangeEnd - rangeStart;
@@ -332,6 +330,7 @@ export default function DispatchPage() {
   }, []);
 
   const loadWeek = useCallback(async () => {
+    setWeekJobs([]);
     setWeekLoading(true);
     setError(null);
     try {

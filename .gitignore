@@ -1,13 +1,22 @@
 # Environment and secrets
 .env
-.env.local
+.env.*
+!.env.example
+frontend/.env
 frontend/.env.local
+backend/.env
 
 # Python
 backend/.venv/
 **/__pycache__/
 *.py[cod]
+*.pkl
+*.egg-info
 backend/.pytest_cache/
+backend/app/ml/models/*.pkl
+backend/app/ml/models/*.json
+tsconfig.tsbuildinfo
+celerybeat-schedule
 .coverage
 htmlcov/
 .mypy_cache/

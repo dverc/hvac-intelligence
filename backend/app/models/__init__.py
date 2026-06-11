@@ -10,6 +10,11 @@ from app.models.ground_truth_label import GroundTruthLabel
 from app.models.google_calendar_token import GoogleCalendarToken
 from app.models.jobber_token import JobberToken
 from app.models.organization import Organization
+from app.models.outbound_campaign import (
+    ConsentRecord,
+    OutboundCallAttempt,
+    OutboundCampaign,
+)
 from app.models.schedule_override import ScheduleOverride
 from app.models.service_catalog import ServiceCatalog
 from app.models.support_ticket import SupportTicket
@@ -30,6 +35,9 @@ __all__ = [
     "GoogleCalendarToken",
     "JobberToken",
     "Organization",
+    "ConsentRecord",
+    "OutboundCampaign",
+    "OutboundCallAttempt",
     "ScheduleOverride",
     "ServiceCatalog",
     "SupportTicket",

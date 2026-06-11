@@ -10,7 +10,7 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { format, parseISO } from "date-fns";
+import { formatInOrgTimezone } from "@/lib/datetime";
 import { Fragment, useEffect, useState } from "react";
 
 import { ApiError, getCustomerTranscripts } from "@/lib/api";
@@ -43,7 +43,13 @@ function formatDateTime(iso: string | null): string {
   if (!iso) {
     return "—";
   }
-  return format(parseISO(iso), "MMM d, yyyy · h:mm a");
+  return formatInOrgTimezone(iso, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function isAssistantMessage(message: TranscriptMessage): boolean {

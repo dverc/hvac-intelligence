@@ -20,7 +20,7 @@ import {
   getModelHealth,
   type CallAnalyticsResponse,
 } from "@/lib/api";
-import { getDashboardOrgId } from "@/lib/config";
+import { formatInOrgTimezone } from "@/lib/datetime";
 import type { DriftStatus, ModelHealthResponse, ScoringMethod } from "@/types/churn";
 
 const DAY_OPTIONS = [
@@ -158,7 +158,13 @@ function ModelHealthCard({
       {health?.last_checked ? (
         <p className="mt-4 text-xs text-gray-400 dark:text-slate-500">
           Last checked{" "}
-          {format(parseISO(health.last_checked), "MMM d, yyyy h:mm a")}
+          {formatInOrgTimezone(health.last_checked, {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}
         </p>
       ) : null}
     </section>
@@ -166,7 +172,6 @@ function ModelHealthCard({
 }
 
 export default function AnalyticsPage() {
-  const orgId = getDashboardOrgId();
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<CallAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -179,7 +184,7 @@ export default function AnalyticsPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await getCallAnalytics(orgId, days);
+      const response = await getCallAnalytics(days);
       setData(response);
     } catch (err) {
       const message =
@@ -193,7 +198,7 @@ export default function AnalyticsPage() {
     } finally {
       setLoading(false);
     }
-  }, [days, orgId]);
+  }, [days]);
 
   const loadModelHealth = useCallback(async () => {
     setHealthLoading(true);
@@ -326,7 +331,7 @@ export default function AnalyticsPage() {
             />
             <StatCard
               label="ROI"
-              value={`${data.revenue_impact.roi_multiplier}x`}
+              value={`${data.revenue_impact.roi_multiplier.toFixed(1)}%`}
             />
           </section>
 

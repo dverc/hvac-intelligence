@@ -17,6 +17,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import TimeSeriesSplit
 
+from app.core.constants import MIN_TRAINING_SAMPLES, MODEL_QUALITY_THRESHOLD
 from app.core.metrics import observe_churn_scoring
 from app.ml.churn_schema import RISK_TIERS
 from app.ml.explainer import explain_prediction
@@ -75,8 +76,10 @@ def train_model(
     Train a calibrated LightGBM churn classifier with time-series CV.
     Returns (model, metrics_dict).
     """
-    if len(training_data) < 10:
-        raise ValueError("Need at least 10 labeled samples to train churn model")
+    if len(training_data) < MIN_TRAINING_SAMPLES:
+        raise ValueError(
+            f"Need at least {MIN_TRAINING_SAMPLES} labeled samples to train churn model"
+        )
 
     X = pd.DataFrame(
         [
@@ -173,7 +176,7 @@ def resolve_scoring_method(
 ) -> str:
     """Return the active scoring source: rule_based or ml_model."""
     auc = float((model_metrics or {}).get("auc_roc", 0.0))
-    if model is None or auc <= 0.55:
+    if model is None or auc <= MODEL_QUALITY_THRESHOLD:
         return "rule_based"
     return "ml_model"
 
@@ -185,7 +188,7 @@ def get_unified_score(
 ) -> tuple[float, str]:
     """
     Single source of truth for churn probability.
-    Uses rule-based scoring when the model is missing or AUC-ROC <= 0.55.
+    Uses rule-based scoring when the model is missing or AUC-ROC <= MODEL_QUALITY_THRESHOLD.
     """
     method = resolve_scoring_method(model, model_metrics)
     auc = float((model_metrics or {}).get("auc_roc", 0.0))

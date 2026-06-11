@@ -956,7 +956,12 @@ class AnalyticsService:
         )
         estimated_bookings_value = round(calls_booked * 150.0, 2)
         roi_multiplier = (
-            round(estimated_bookings_value / total_cost, 1) if total_cost > 0 else 0.0
+            round(
+                ((estimated_bookings_value - total_cost) / total_cost) * 100,
+                1,
+            )
+            if total_cost > 0
+            else 0.0
         )
 
         day_counts: Counter = Counter(

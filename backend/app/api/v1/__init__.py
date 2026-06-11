@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends
 
+from app.core.auth_jwt import get_current_user
+
 from app.api.v1 import (
     analytics,
     audit,
@@ -13,31 +15,31 @@ from app.api.v1 import (
     ml,
     onboarding,
     organizations,
+    outbound,
     scheduling,
     stream,
     system,
     webhook_vapi,
 )
-from app.core.tenant import get_dashboard_org_id
+_jwt_auth = [Depends(get_current_user)]
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
-api_router.include_router(organizations.router)
-api_router.include_router(onboarding.router)
-api_router.include_router(calls.router)
-api_router.include_router(customers.router)
-api_router.include_router(churn.router)
-api_router.include_router(ml.router)
-api_router.include_router(knowledge.router)
-api_router.include_router(imports.router)
-api_router.include_router(system.router)
-api_router.include_router(audit.router)
-api_router.include_router(scheduling.router)
-api_router.include_router(integrations.router)
-api_router.include_router(
-    analytics.router, dependencies=[Depends(get_dashboard_org_id)]
-)
-api_router.include_router(stream.router)
+api_router.include_router(organizations.router, dependencies=_jwt_auth)
+api_router.include_router(onboarding.router, dependencies=_jwt_auth)
+api_router.include_router(calls.router, dependencies=_jwt_auth)
+api_router.include_router(customers.router, dependencies=_jwt_auth)
+api_router.include_router(churn.router, dependencies=_jwt_auth)
+api_router.include_router(ml.router, dependencies=_jwt_auth)
+api_router.include_router(knowledge.router, dependencies=_jwt_auth)
+api_router.include_router(imports.router, dependencies=_jwt_auth)
+api_router.include_router(system.router, dependencies=_jwt_auth)
+api_router.include_router(audit.router, dependencies=_jwt_auth)
+api_router.include_router(scheduling.router, dependencies=_jwt_auth)
+api_router.include_router(integrations.router, dependencies=_jwt_auth)
+api_router.include_router(analytics.router, dependencies=_jwt_auth)
+api_router.include_router(outbound.router, dependencies=_jwt_auth)
+api_router.include_router(stream.router, dependencies=_jwt_auth)
 
 vapi_router = webhook_vapi.router
 google_oauth_router = integrations.google_oauth_router

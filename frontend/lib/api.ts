@@ -46,6 +46,27 @@ function authenticatedHeaders(): Record<string, string> {
   return headers;
 }
 
+function handleUnauthorized(status: number): void {
+  if (status === 401 && typeof window !== "undefined") {
+    localStorage.removeItem("hvac_token");
+    localStorage.removeItem("hvac_org_id");
+    window.location.href = "/login";
+  }
+}
+
+async function parseApiResponse<T>(
+  response: Response,
+  path: string,
+  method: string,
+): Promise<T> {
+  if (!response.ok) {
+    handleUnauthorized(response.status);
+    const body = await response.text();
+    throw new ApiError(response.status, `${method} ${path} failed: ${body}`);
+  }
+  return response.json() as Promise<T>;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -71,30 +92,20 @@ async function apiGet<T>(
 
   const response = await fetch(url.toString(), {
     cache: "no-store",
-    headers: { Accept: "application/json", ...apiKeyHeaders() },
+    headers: { Accept: "application/json", ...authenticatedHeaders() },
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `GET ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "GET");
 }
 
 async function apiPost<T>(path: string): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "POST",
     cache: "no-store",
-    headers: { Accept: "application/json", ...apiKeyHeaders() },
+    headers: { Accept: "application/json", ...authenticatedHeaders() },
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `POST ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "POST");
 }
 
 async function apiPatch<T>(path: string, payload: CustomerUpdatePayload): Promise<T> {
@@ -104,17 +115,12 @@ async function apiPatch<T>(path: string, payload: CustomerUpdatePayload): Promis
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      ...apiKeyHeaders(),
+      ...authenticatedHeaders(),
     },
     body: JSON.stringify(payload),
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `PATCH ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "PATCH");
 }
 
 async function apiPatchJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
@@ -124,32 +130,22 @@ async function apiPatchJson<T>(path: string, payload: Record<string, unknown>): 
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      ...apiKeyHeaders(),
+      ...authenticatedHeaders(),
     },
     body: JSON.stringify(payload),
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `PATCH ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "PATCH");
 }
 
 async function apiDelete<T>(path: string): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "DELETE",
     cache: "no-store",
-    headers: { Accept: "application/json", ...apiKeyHeaders() },
+    headers: { Accept: "application/json", ...authenticatedHeaders() },
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `DELETE ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "DELETE");
 }
 
 async function apiPostJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
@@ -159,33 +155,23 @@ async function apiPostJson<T>(path: string, payload: Record<string, unknown>): P
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      ...apiKeyHeaders(),
+      ...authenticatedHeaders(),
     },
     body: JSON.stringify(payload),
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `POST ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "POST");
 }
 
 async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: "POST",
     cache: "no-store",
-    headers: { Accept: "application/json", ...apiKeyHeaders() },
+    headers: { Accept: "application/json", ...authenticatedHeaders() },
     body: formData,
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `POST ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "POST");
 }
 
 // ── Churn ─────────────────────────────────────────────────────────────────────
@@ -271,13 +257,7 @@ async function apiGetAuthenticated<T>(path: string): Promise<T> {
     cache: "no-store",
     headers: { Accept: "application/json", ...authenticatedHeaders() },
   });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `GET ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "GET");
 }
 
 export function getCustomerShapExplanation(customerId: string) {
@@ -349,11 +329,8 @@ export interface CallAnalyticsResponse {
   };
 }
 
-export function getCallAnalytics(orgId: string, days = 30) {
-  return apiGet<CallAnalyticsResponse>("/api/v1/analytics/calls", {
-    org_id: orgId,
-    days,
-  });
+export function getCallAnalytics(days = 30) {
+  return apiGet<CallAnalyticsResponse>("/api/v1/analytics/calls", { days });
 }
 
 // ── Knowledge base ────────────────────────────────────────────────────────────
@@ -558,17 +535,12 @@ async function apiDeleteJson<T>(path: string, payload: Record<string, unknown>):
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      ...apiKeyHeaders(),
+      ...authenticatedHeaders(),
     },
     body: JSON.stringify(payload),
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new ApiError(response.status, `DELETE ${path} failed: ${body}`);
-  }
-
-  return response.json() as Promise<T>;
+  return parseApiResponse<T>(response, path, "DELETE");
 }
 
 // ── Integrations (Jobber) ───────────────────────────────────────────────────
@@ -710,6 +682,83 @@ export function getSystemHealth() {
   return apiGet<SystemHealthResponse>("/api/v1/system/health");
 }
 
+// ── Outbound campaigns ──────────────────────────────────────────────────────
+
+export type OutboundCampaign = {
+  campaign_id: string;
+  org_id: string;
+  campaign_name: string;
+  campaign_type: string;
+  status: string;
+  churn_score_threshold: number;
+  max_attempts: number;
+  calling_hours_start: number;
+  calling_hours_end: number;
+  disclosure_style: string;
+  total_customers_targeted: number;
+  total_calls_made: number;
+  total_consented: number;
+  total_booked: number;
+  created_at: string;
+  updated_at: string;
+  conversion_rate: number;
+};
+
+export type BlockedAttempt = {
+  attempt_id: string;
+  customer_id: string;
+  customer_name: string;
+  block_reason: string;
+  notes: string | null;
+  timestamp: string;
+};
+
+export function listOutboundCampaigns() {
+  return apiGet<OutboundCampaign[]>("/api/v1/outbound/campaigns");
+}
+
+export function createOutboundCampaign(payload: Record<string, unknown>) {
+  return apiPostJson<OutboundCampaign>("/api/v1/outbound/campaigns", payload);
+}
+
+export function previewEligibleCustomers(
+  churnScoreThreshold: number,
+  maxAttempts: number,
+) {
+  return apiGet<{ eligible_count: number; churn_score_threshold: number }>(
+    "/api/v1/outbound/campaigns/preview-eligible",
+    { churn_score_threshold: churnScoreThreshold, max_attempts: maxAttempts },
+  );
+}
+
+export function updateOutboundCampaignStatus(
+  campaignId: string,
+  status: string,
+) {
+  return apiPatchJson<OutboundCampaign>(
+    `/api/v1/outbound/campaigns/${campaignId}/status`,
+    { status },
+  );
+}
+
+export function executeOutboundCampaign(campaignId: string) {
+  return apiPostJson<{ status: string; message: string; campaign_id: string }>(
+    `/api/v1/outbound/campaigns/${campaignId}/execute`,
+    {},
+  );
+}
+
+export function listBlockedAttempts() {
+  return apiGet<BlockedAttempt[]>("/api/v1/outbound/compliance/blocked");
+}
+
+export function getDisclosurePreview(disclosureStyle: string) {
+  return apiGet<{ display_name: string; disclosure_text: string }>(
+    "/api/v1/outbound/compliance/disclosure-preview",
+    { disclosure_style: disclosureStyle },
+  );
+}
+
 // ── Data import (CSV + Google Drive) ────────────────────────────────────────
 
 export type CsvImportResult = {
@@ -757,10 +806,11 @@ export async function getImportTemplate(
     `${getApiBaseUrl()}/api/v1/imports/${orgId}/templates/${type}`,
     {
       cache: "no-store",
-      headers: { ...apiKeyHeaders() },
+      headers: { ...authenticatedHeaders() },
     },
   );
   if (!response.ok) {
+    handleUnauthorized(response.status);
     const body = await response.text();
     throw new ApiError(
       response.status,

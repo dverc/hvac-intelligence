@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     VAPI_API_KEY: str
     VAPI_WEBHOOK_SECRET: str
     VAPI_ASSISTANT_ID: str
+    VAPI_PHONE_NUMBER_ID: str = ""
 
     # SMS (Twilio — optional; empty disables outbound SMS)
     TWILIO_ACCOUNT_SID: str = ""

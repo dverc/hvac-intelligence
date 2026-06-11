@@ -121,6 +121,7 @@ class AvailabilityService:
         technician_id: uuid.UUID,
         target_date: date,
         tz_name: str,
+        exclude_job_id: uuid.UUID | None = None,
     ) -> list[tuple[datetime, datetime]]:
         tz = ZoneInfo(tz_name)
         day_start = datetime.combine(target_date, time.min, tzinfo=tz)
@@ -142,6 +143,8 @@ class AvailabilityService:
 
         blocks: list[tuple[datetime, datetime]] = []
         for job in rows:
+            if exclude_job_id is not None and job.job_id == exclude_job_id:
+                continue
             assert job.scheduled_window_start is not None
             assert job.scheduled_window_end is not None
             start_local = job.scheduled_window_start.astimezone(tz)
@@ -248,6 +251,7 @@ class AvailabilityService:
         slot_date: date,
         start_time: time,
         end_time: time,
+        exclude_job_id: uuid.UUID | None = None,
     ) -> tuple[bool, str]:
         tech = await self.db.get(Technician, technician_id)
         if tech is None or tech.org_id != org_id:
@@ -269,7 +273,9 @@ class AvailabilityService:
         tz = ZoneInfo(tz_name)
         requested_start = datetime.combine(slot_date, start_time, tzinfo=tz)
         requested_end = datetime.combine(slot_date, end_time, tzinfo=tz)
-        busy = await self._get_busy_blocks(org_id, technician_id, slot_date, tz_name)
+        busy = await self._get_busy_blocks(
+            org_id, technician_id, slot_date, tz_name, exclude_job_id=exclude_job_id
+        )
         for busy_start, busy_end in busy:
             if _datetime_ranges_overlap(
                 requested_start, requested_end, busy_start, busy_end

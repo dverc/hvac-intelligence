@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   createOrganization,
+  getDisclosurePreview,
   getOrganizations,
   updateOrganizationSettings,
   type OrganizationCreatePayload,
@@ -57,7 +58,16 @@ export default function AdminPage() {
     timezone: "America/Los_Angeles",
     business_hours_from: "08:00",
     business_hours_to: "17:00",
+    outbound_enabled: false,
+    outbound_display_name: "",
+    outbound_disclosure_style: "FRIENDLY",
+    outbound_churn_threshold: 0.75,
+    outbound_max_attempts: 2,
+    outbound_calling_hours_start: 9,
+    outbound_calling_hours_end: 18,
+    outbound_campaign_type: "REACTIVATION",
   });
+  const [outboundDisclosurePreview, setOutboundDisclosurePreview] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,7 +102,18 @@ export default function AdminPage() {
       timezone: String(s.timezone || "America/Los_Angeles"),
       business_hours_from: String(hours.start || "08:00"),
       business_hours_to: String(hours.end || "17:00"),
+      outbound_enabled: Boolean(s.outbound_enabled),
+      outbound_display_name: String(s.outbound_display_name || org.org_name),
+      outbound_disclosure_style: String(s.outbound_disclosure_style || "FRIENDLY"),
+      outbound_churn_threshold: Number(s.outbound_churn_threshold ?? 0.75),
+      outbound_max_attempts: Number(s.outbound_max_attempts ?? 2),
+      outbound_calling_hours_start: Number(s.outbound_calling_hours_start ?? 9),
+      outbound_calling_hours_end: Number(s.outbound_calling_hours_end ?? 18),
+      outbound_campaign_type: String(s.outbound_campaign_type || "REACTIVATION"),
     });
+    void getDisclosurePreview(String(s.outbound_disclosure_style || "FRIENDLY")).then(
+      (res) => setOutboundDisclosurePreview(res.disclosure_text),
+    );
   };
 
   const handleCreate = async () => {
@@ -133,6 +154,15 @@ export default function AdminPage() {
         start: settingsForm.business_hours_from,
         end: settingsForm.business_hours_to,
       },
+      outbound_enabled: settingsForm.outbound_enabled,
+      outbound_display_name:
+        settingsForm.outbound_display_name || selected.org_name,
+      outbound_disclosure_style: settingsForm.outbound_disclosure_style,
+      outbound_churn_threshold: settingsForm.outbound_churn_threshold,
+      outbound_max_attempts: settingsForm.outbound_max_attempts,
+      outbound_calling_hours_start: settingsForm.outbound_calling_hours_start,
+      outbound_calling_hours_end: settingsForm.outbound_calling_hours_end,
+      outbound_campaign_type: settingsForm.outbound_campaign_type,
     };
     try {
       await updateOrganizationSettings(selected.org_id, settings);
@@ -305,6 +335,59 @@ export default function AdminPage() {
                 }))
               }
             />
+            <div className="rounded-lg border border-gray-200 p-4 dark:border-slate-700">
+              <h3 className="mb-3 font-semibold text-gray-900 dark:text-slate-100">
+                Outbound Calling Settings
+              </h3>
+              <label className="mb-3 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.outbound_enabled}
+                  onChange={(e) =>
+                    setSettingsForm((s) => ({
+                      ...s,
+                      outbound_enabled: e.target.checked,
+                    }))
+                  }
+                />
+                Enable outbound calling (master switch)
+              </label>
+              <input
+                className="mb-3 w-full rounded border px-3 py-2 text-sm dark:bg-slate-800"
+                placeholder="Company display name for AI disclosure"
+                value={settingsForm.outbound_display_name}
+                onChange={(e) =>
+                  setSettingsForm((s) => ({
+                    ...s,
+                    outbound_display_name: e.target.value,
+                  }))
+                }
+              />
+              <div className="mb-3 flex gap-4 text-sm">
+                {(["FRIENDLY", "FORMAL"] as const).map((style) => (
+                  <label key={style} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="outbound_disclosure_style"
+                      checked={settingsForm.outbound_disclosure_style === style}
+                      onChange={() => {
+                        setSettingsForm((s) => ({
+                          ...s,
+                          outbound_disclosure_style: style,
+                        }));
+                        void getDisclosurePreview(style).then((res) =>
+                          setOutboundDisclosurePreview(res.disclosure_text),
+                        );
+                      }}
+                    />
+                    {style === "FRIENDLY" ? "Friendly" : "Formal"}
+                  </label>
+                ))}
+              </div>
+              <p className="rounded bg-gray-50 p-3 text-sm italic text-gray-700 dark:bg-slate-800 dark:text-slate-300">
+                Live preview: &ldquo;{outboundDisclosurePreview}&rdquo;
+              </p>
+            </div>
             <select
               className="rounded border px-3 py-2 text-sm dark:bg-slate-800"
               value={settingsForm.timezone}

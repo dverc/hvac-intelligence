@@ -19,6 +19,12 @@ from app.core.auth_jwt import (
     verify_access_token,
 )
 from app.core.config import get_settings
+from app.core.constants import (
+    FORGOT_PASSWORD_RATE_LIMIT,
+    LOCKOUT_MINUTES,
+    LOGIN_RATE_LIMIT,
+    MAX_FAILED_LOGINS,
+)
 from app.core.rate_limit import limiter
 from app.models.organization import Organization
 from app.models.user import User
@@ -137,7 +143,7 @@ async def register_user(
 
 
 @router.post("/login", response_model=LoginResponse)
-@limiter.limit("5/minute", override_defaults=True)
+@limiter.limit(LOGIN_RATE_LIMIT, override_defaults=True)
 async def login(
     request: Request,
     form: OAuth2PasswordRequestForm = Depends(),
@@ -158,8 +164,8 @@ async def login(
     if user is None or not pwd_context.verify(form.password, user.hashed_password):
         if user is not None:
             user.failed_login_attempts += 1
-            if user.failed_login_attempts >= 5:
-                user.locked_until = now + timedelta(minutes=15)
+            if user.failed_login_attempts >= MAX_FAILED_LOGINS:
+                user.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
             await db.flush()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -220,7 +226,9 @@ async def logout() -> dict[str, str]:
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
+@limiter.limit(FORGOT_PASSWORD_RATE_LIMIT, override_defaults=True)
 async def forgot_password(
+    request: Request,
     body: ForgotPasswordRequest,
     db: AsyncSession = Depends(get_db),
 ) -> ForgotPasswordResponse:

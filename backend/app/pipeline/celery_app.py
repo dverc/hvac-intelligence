@@ -26,7 +26,7 @@ celery_app.conf.update(
     task_routes={
         "app.pipeline.tasks.process_call_features": {"queue": "features"},
     },
-    imports=("app.pipeline.tasks",),
+    imports=("app.pipeline.tasks", "app.tasks.celery_tasks"),
     beat_schedule={
         "sync-technician-schedules": {
             "task": "app.pipeline.tasks.sync_technician_schedules",
@@ -55,6 +55,10 @@ celery_app.conf.update(
         "check-model-drift-and-retrain": {
             "task": "app.pipeline.tasks.check_model_drift_and_retrain",
             "schedule": crontab(minute=0, hour=3),
+        },
+        "check-and-launch-outbound-campaigns": {
+            "task": "app.tasks.celery_tasks.check_and_launch_campaigns",
+            "schedule": crontab(minute=0, hour=10),
         },
     },
 )

@@ -332,7 +332,7 @@ class ToolExecutor:
                     availability = json.loads(
                         await self.execute_check_availability(
                             preferred_date=parsed.preferred_window,
-                            issue_type=parsed.issue_type,
+            issue_type=parsed.issue_type,
                         )
                     )
                     return json.dumps(
@@ -732,7 +732,7 @@ class ToolExecutor:
                         "priority": ticket["priority"],
                     },
                     call_id=get_call_id() or None,
-                )
+        )
         return json.dumps({"success": True, "ticket": ticket})
 
     async def execute_create_customer(self, **kwargs: Any) -> str:

@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/knowledge", label: "Knowledge Base" },
   { href: "/dashboard/import", label: "Import" },
   { href: "/dashboard/dispatch", label: "Dispatch" },
+  { href: "/dashboard/outbound", label: "Outbound" },
   { href: "/dashboard/integrations", label: "Integrations" },
   { href: "/dashboard/admin", label: "Admin" },
   { href: "/dashboard/health", label: "System Health" },

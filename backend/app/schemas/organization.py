@@ -32,6 +32,15 @@ class OrganizationSettings(BaseModel):
     enabled_tools: list[str] | None = None  # None = all tools enabled
     system_prompt_override: str | None = None
     first_message: str | None = None
+    # Outbound calling (client-configurable; legal disclosures are always enforced)
+    outbound_enabled: bool = False
+    outbound_display_name: str | None = None
+    outbound_disclosure_style: str = "FRIENDLY"
+    outbound_churn_threshold: float = 0.75
+    outbound_max_attempts: int = 2
+    outbound_calling_hours_start: int = 9
+    outbound_calling_hours_end: int = 18
+    outbound_campaign_type: str = "REACTIVATION"
 
 
 class OrganizationCreate(BaseModel):

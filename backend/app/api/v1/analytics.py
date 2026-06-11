@@ -61,8 +61,8 @@ async def feature_importance(
 
 @router.get("/calls", response_model=CallAnalyticsResponse)
 async def call_analytics(
-    org_id: str = Query(...),
     days: int = Query(default=30, ge=1, le=90),
     analytics: AnalyticsService = Depends(get_analytics_service),
+    org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> CallAnalyticsResponse:
-    return await analytics.get_call_analytics(uuid.UUID(org_id), days)
+    return await analytics.get_call_analytics(org_id, days)

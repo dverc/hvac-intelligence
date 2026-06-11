@@ -163,8 +163,11 @@ def _parse_time_range(lower: str) -> tuple[time, time] | None:
     match = _TIME_RANGE_PATTERNS[3].search(lower)
     if match:
         sh, sm, eh, em = match.groups()
-        start_t = time(int(sh), int(sm))
-        end_t = time(int(eh), int(em))
+        try:
+            start_t = time(int(sh), int(sm))
+            end_t = time(int(eh), int(em))
+        except ValueError:
+            return None
         if start_t < end_t:
             return start_t, end_t
 
@@ -216,11 +219,18 @@ def _parse_date(lower: str, today: date) -> date:
 
 
 def parse_preferred_window(
-    preferred_window: str,
+    preferred_window: str | None,
     tz_name: str = "America/Los_Angeles",
 ) -> ParsedWindow:
     """Map natural-language booking windows to date + local times."""
     today = _today_in_tz(tz_name)
+    if not preferred_window or not str(preferred_window).strip():
+        return ParsedWindow(
+            slot_date=today + timedelta(days=3),
+            start_time=time(8, 0),
+            end_time=time(10, 0),
+            times_resolved=False,
+        )
     lower = preferred_window.lower().strip()
 
     slot_date = _parse_date(lower, today)

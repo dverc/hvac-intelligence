@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import aliased
 
 from app.api.deps import get_analytics_service, get_customer_service
 from app.core.auth_jwt import get_current_user
@@ -42,39 +43,54 @@ async def list_customers(
     customer_service: CustomerService = Depends(get_customer_service),
     org_id: uuid.UUID = Depends(get_dashboard_org_id),
 ) -> dict:
-    stmt = select(Customer).where(Customer.org_id == org_id)
+    filters = [Customer.org_id == org_id]
     if search:
         pattern = f"%{search}%"
-        stmt = stmt.where(
+        filters.append(
             or_(
                 Customer.full_name.ilike(pattern),
                 Customer.phone_primary.ilike(pattern),
                 Customer.email.ilike(pattern),
             )
         )
-    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count_stmt = select(func.count()).select_from(Customer).where(*filters)
     total = (await customer_service.db.execute(count_stmt)).scalar_one()
     offset = (page - 1) * limit
-    rows = (
-        await customer_service.db.execute(
-            stmt.order_by(Customer.full_name).offset(offset).limit(limit)
-        )
-    ).scalars().all()
 
-    score_rows = (
-        await customer_service.db.execute(
-            select(ChurnScore)
-            .where(
-                ChurnScore.org_id == org_id,
-                ChurnScore.entity_type == "CUSTOMER",
-            )
-            .order_by(ChurnScore.score_timestamp.desc())
+    latest_score = (
+        select(
+            ChurnScore.entity_id,
+            func.max(ChurnScore.score_timestamp).label("max_ts"),
         )
-    ).scalars().all()
-    latest_tier_by_customer: dict[uuid.UUID, str] = {}
-    for score in score_rows:
-        if score.entity_id not in latest_tier_by_customer:
-            latest_tier_by_customer[score.entity_id] = score.risk_tier
+        .where(
+            ChurnScore.org_id == org_id,
+            ChurnScore.entity_type == "CUSTOMER",
+        )
+        .group_by(ChurnScore.entity_id)
+        .subquery()
+    )
+    latest_churn = aliased(ChurnScore)
+    stmt = (
+        select(Customer, latest_churn)
+        .outerjoin(
+            latest_score,
+            latest_score.c.entity_id == Customer.customer_id,
+        )
+        .outerjoin(
+            latest_churn,
+            (latest_churn.entity_id == Customer.customer_id)
+            & (latest_churn.score_timestamp == latest_score.c.max_ts)
+            & (latest_churn.org_id == org_id),
+        )
+        .where(*filters)
+        .order_by(
+            latest_churn.churn_probability.desc().nullslast(),
+            Customer.full_name,
+        )
+    )
+    rows = (
+        await customer_service.db.execute(stmt.offset(offset).limit(limit))
+    ).all()
 
     return {
         "page": page,
@@ -87,12 +103,18 @@ async def list_customers(
                 "phone_primary": c.phone_primary,
                 "account_status": c.account_status,
                 "customer_tier": c.customer_tier,
-                "risk_tier": latest_tier_by_customer.get(
-                    c.customer_id,
-                    str((c.metadata_ or {}).get("churn_tier", "LOW")).upper(),
+                "risk_tier": (
+                    latest_churn_row.risk_tier
+                    if latest_churn_row is not None
+                    else str((c.metadata_ or {}).get("churn_tier", "LOW")).upper()
+                ),
+                "churn_probability": (
+                    float(latest_churn_row.churn_probability)
+                    if latest_churn_row is not None
+                    else float((c.metadata_ or {}).get("churn_probability", 0.0))
                 ),
             }
-            for c in rows
+            for c, latest_churn_row in rows
         ],
     }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from sqlalchemy import select
 
@@ -30,7 +32,7 @@ async def test_call_analytics_returns_200_with_correct_structure(
 
     response = await auth_client.get(
         "/api/v1/analytics/calls",
-        params={"org_id": str(SEED_ORG_ID), "days": 30},
+        params={"days": 30},
     )
 
     assert response.status_code == 200
@@ -55,11 +57,18 @@ async def test_call_analytics_returns_200_with_correct_structure(
 
 @pytest.mark.asyncio
 async def test_call_analytics_returns_zero_values_when_org_has_no_calls(auth_client):
-    empty_org_id = "00000000-0000-4000-8000-000000000099"
-    response = await auth_client.get(
-        "/api/v1/analytics/calls",
-        params={"org_id": empty_org_id, "days": 7},
-    )
+    from app.core.tenant import get_dashboard_org_id
+    from app.main import app
+
+    empty_org_id = uuid.UUID("00000000-0000-4000-8000-000000000099")
+    app.dependency_overrides[get_dashboard_org_id] = lambda: empty_org_id
+    try:
+        response = await auth_client.get(
+            "/api/v1/analytics/calls",
+            params={"days": 7},
+        )
+    finally:
+        app.dependency_overrides.pop(get_dashboard_org_id, None)
 
     assert response.status_code == 200
     body = response.json()
@@ -77,11 +86,18 @@ async def test_call_analytics_returns_zero_values_when_org_has_no_calls(auth_cli
 
 @pytest.mark.asyncio
 async def test_call_analytics_booking_rate_zero_when_no_calls(auth_client):
-    empty_org_id = "00000000-0000-4000-8000-000000000099"
-    response = await auth_client.get(
-        "/api/v1/analytics/calls",
-        params={"org_id": empty_org_id, "days": 30},
-    )
+    from app.core.tenant import get_dashboard_org_id
+    from app.main import app
+
+    empty_org_id = uuid.UUID("00000000-0000-4000-8000-000000000099")
+    app.dependency_overrides[get_dashboard_org_id] = lambda: empty_org_id
+    try:
+        response = await auth_client.get(
+            "/api/v1/analytics/calls",
+            params={"days": 30},
+        )
+    finally:
+        app.dependency_overrides.pop(get_dashboard_org_id, None)
 
     assert response.status_code == 200
     assert response.json()["summary"]["booking_rate"] == 0.0
@@ -91,7 +107,7 @@ async def test_call_analytics_booking_rate_zero_when_no_calls(auth_client):
 async def test_call_analytics_calls_by_day_has_one_entry_per_day_in_range(auth_client):
     response = await auth_client.get(
         "/api/v1/analytics/calls",
-        params={"org_id": str(SEED_ORG_ID), "days": 14},
+        params={"days": 14},
     )
 
     assert response.status_code == 200
@@ -106,7 +122,7 @@ async def test_call_analytics_calls_by_day_has_one_entry_per_day_in_range(auth_c
 async def test_call_analytics_calls_by_hour_always_has_24_entries(auth_client):
     response = await auth_client.get(
         "/api/v1/analytics/calls",
-        params={"org_id": str(SEED_ORG_ID), "days": 30},
+        params={"days": 30},
     )
 
     assert response.status_code == 200
@@ -139,7 +155,7 @@ async def test_call_analytics_includes_revenue_impact_with_roi_multiplier(
 
     response = await auth_client.get(
         "/api/v1/analytics/calls",
-        params={"org_id": str(SEED_ORG_ID), "days": 30},
+        params={"days": 30},
     )
 
     assert response.status_code == 200
@@ -151,7 +167,10 @@ async def test_call_analytics_includes_revenue_impact_with_roi_multiplier(
     assert revenue["ai_cost_usd"] == pytest.approx(
         response.json()["summary"]["total_cost_usd"]
     )
-    assert isinstance(revenue["roi_multiplier"], float)
+    est = revenue["estimated_bookings_value_usd"]
+    cost = revenue["ai_cost_usd"]
+    expected_roi = ((est - cost) / cost) * 100 if cost > 0 else 0.0
+    assert revenue["roi_multiplier"] == pytest.approx(expected_roi, rel=0.01)
 
 
 @pytest.mark.asyncio
@@ -171,7 +190,7 @@ async def test_call_analytics_calls_abandoned_counts_short_calls(
 
     response = await auth_client.get(
         "/api/v1/analytics/calls",
-        params={"org_id": str(SEED_ORG_ID), "days": 30},
+        params={"days": 30},
     )
 
     assert response.status_code == 200

@@ -50,6 +50,10 @@ def test_phone_normalization():
     assert normalize_phone_to_e164("9493313190") == "+19493313190"
     assert normalize_phone_to_e164("(949) 331-3190") == "+19493313190"
     assert normalize_phone_to_e164("+19493313190") == "+19493313190"
+    assert normalize_phone_to_e164("1-949-331-3190") == "+19493313190"
+    assert normalize_phone_to_e164("949 331 3190") == "+19493313190"
+    assert normalize_phone_to_e164("") == ""
+    assert normalize_phone_to_e164("   ") == ""
 
 
 def test_booking_confirmation_message_format():

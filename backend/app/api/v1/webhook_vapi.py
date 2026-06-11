@@ -140,6 +140,19 @@ async def _process_call_end_background(call_data: dict[str, Any], org_id: str) -
             result = await service.process_completed_call(
                 call_data, uuid.UUID(org_id)
             )
+            if result and result.get("customer_id"):
+                duration = int(result.get("duration_seconds") or 0)
+                outcome = str(result.get("call_outcome") or "").upper()
+                if duration >= 30 and outcome not in {"ABANDONED", "OPT_OUT"}:
+                    from app.services.outbound_service import OutboundService
+
+                    outbound = OutboundService(session)
+                    call_id = str(result.get("call_id") or "")
+                    await outbound.record_inbound_engagement_consent(
+                        uuid.UUID(str(result["customer_id"])),
+                        uuid.UUID(org_id),
+                        call_id,
+                    )
             await session.commit()
             if result:
                 cost_display = result["call_cost_usd"]
@@ -345,7 +358,29 @@ async def handle_vapi_webhook(
                             f"{system_prompt}"
                         )
 
+                from app.services.compliance_service import (
+                    get_inbound_disclosure_text,
+                    get_org_display_name,
+                )
+
+                if call_start_org is not None:
+                    company_name = get_org_display_name(call_start_org)
+                    consent_capture = (
+                        "CONSENT CAPTURE — LEGAL REQUIREMENT:\n"
+                        f"- At the start of EVERY call, before anything else, say: "
+                        f"'{get_inbound_disclosure_text(company_name)}'\n"
+                        "- If the customer agrees to proceed: this constitutes verbal "
+                        "consent to the call.\n"
+                        "- If the customer asks to opt out or says they don't want calls: "
+                        "say 'I've noted that. You won't be contacted again. Goodbye.' "
+                        "and end the call immediately.\n"
+                        "- Do NOT skip this disclosure under any circumstances.\n\n"
+                    )
+                else:
+                    consent_capture = ""
+
                 system_prompt = (
+                    f"{consent_capture}"
                     "TOOL RULES - CRITICAL:\n"
                     "- create_support_ticket: You MUST collect customer_id, ticket_type, "
                     "subject, description, and priority BEFORE calling this tool. Never call "
@@ -393,7 +428,11 @@ async def handle_vapi_webhook(
                     assistant_id = get_settings().VAPI_ASSISTANT_ID
                 if assistant_id:
                     assistant_overrides["assistantId"] = assistant_id
-                if enrichment.get("first_message"):
+                if call_start_org is not None:
+                    assistant_overrides["firstMessage"] = get_inbound_disclosure_text(
+                        get_org_display_name(call_start_org)
+                    )
+                elif enrichment.get("first_message"):
                     assistant_overrides["firstMessage"] = enrichment["first_message"]
 
                 return JSONResponse({"assistantOverrides": assistant_overrides})

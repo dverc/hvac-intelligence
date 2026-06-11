@@ -93,7 +93,10 @@ async def test_call_start_high_risk_injects_retention(db_session, seeded_custome
     assert response.status_code == 200
     data = response.json()
     overrides = data["assistantOverrides"]
-    assert "firstMessage" not in overrides
+    first_message = overrides["firstMessage"]
+    assert "AI" in first_message
+    assert "recorded" in first_message.lower()
+    assert "HVAC Intelligence Demo" in first_message
     variables = overrides["variableValues"]
     assert variables["customer_name"]
     assert variables["equipment_info"]

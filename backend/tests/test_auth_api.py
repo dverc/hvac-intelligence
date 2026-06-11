@@ -37,6 +37,17 @@ async def test_customers_with_wrong_api_key_returns_401(api_client):
 
 
 @pytest.mark.asyncio
+async def test_customers_with_api_key_but_no_jwt_returns_401(api_client, dashboard_api_key):
+    transport = api_client._transport
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/customers",
+            headers={"X-API-Key": dashboard_api_key},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_customers_with_correct_api_key_returns_200(auth_client, seeded_customer):
     response = await auth_client.get("/api/v1/customers")
     assert response.status_code == 200

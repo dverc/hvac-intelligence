@@ -38,7 +38,7 @@ def normalize_phone_to_e164(to_number: str) -> str:
     raw = (to_number or "").strip()
     digits = re.sub(r"\D", "", raw)
     if not digits:
-        return raw
+        return ""
     if len(digits) == 10:
         return f"+1{digits}"
     if len(digits) == 11 and digits.startswith("1"):
@@ -97,6 +97,9 @@ def send_sms(to_number: str, message: str) -> bool:
         return False
 
     normalized = normalize_phone_to_e164(to_number)
+    if not normalized:
+        logger.warning("SMS not sent — invalid or empty phone number")
+        return False
     try:
         from twilio.rest import Client
 

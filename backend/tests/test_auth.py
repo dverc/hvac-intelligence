@@ -10,6 +10,7 @@ import pytest
 from httpx import AsyncClient
 from jose import jwt
 from passlib.context import CryptContext
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth_jwt import ALGORITHM, create_access_token
@@ -283,6 +284,68 @@ async def test_login_locks_account_after_five_failed_attempts(api_client, db_ses
 
     assert locked.status_code == 423
     assert locked.json()["detail"] == "Account temporarily locked. Try again later."
+
+
+@pytest.mark.asyncio
+async def test_me_returns_401_with_expired_access_token(api_client, db_session):
+    email = _unique_email("expired-access")
+    await _register_test_user(api_client, db_session, email, "securepass123")
+    settings = get_settings()
+    expired_payload = {
+        "sub": email,
+        "email": email,
+        "role": "dispatcher",
+        "org_id": SEED_ORG_ID_STR,
+        "exp": datetime.now(timezone.utc) - timedelta(hours=1),
+    }
+    token = jwt.encode(expired_payload, settings.JWT_SECRET_KEY, algorithm=ALGORITHM)
+
+    transport = api_client._transport
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_me_returns_401_with_missing_token(api_client):
+    transport = api_client._transport
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/auth/me")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_lockout_expires_after_fifteen_minutes(api_client, db_session):
+    from app.core.constants import LOCKOUT_MINUTES
+    from app.core.rate_limit import limiter
+
+    email = _unique_email("lockout-expiry")
+    password = "securepass123"
+    await _register_test_user(api_client, db_session, email, password)
+
+    user = (
+        await db_session.execute(select(User).where(User.email == email))
+    ).scalar_one()
+    user.failed_login_attempts = 5
+    user.locked_until = datetime.now(timezone.utc) - timedelta(minutes=1)
+    await db_session.flush()
+
+    limiter.enabled = False
+    try:
+        transport = api_client._transport
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/auth/login",
+                data={"username": email, "password": password},
+            )
+    finally:
+        limiter.enabled = True
+
+    assert response.status_code == 200
+    assert LOCKOUT_MINUTES == 15
 
 
 @pytest.mark.asyncio

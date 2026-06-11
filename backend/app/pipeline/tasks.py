@@ -34,11 +34,34 @@ from app.pipeline.event_bus import (
 
 logger = logging.getLogger(__name__)
 
+_TRANSIENT_EXCEPTIONS = (
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+
+try:
+    import httpx
+
+    _TRANSIENT_EXCEPTIONS = _TRANSIENT_EXCEPTIONS + (
+        httpx.HTTPError,
+        httpx.TimeoutException,
+    )
+except ImportError:  # pragma: no cover
+    pass
+
+try:
+    from sqlalchemy.exc import OperationalError
+
+    _TRANSIENT_EXCEPTIONS = _TRANSIENT_EXCEPTIONS + (OperationalError,)
+except ImportError:  # pragma: no cover
+    pass
+
 _STANDARD_TASK_RETRY = dict(
     bind=True,
     max_retries=3,
     default_retry_delay=60,
-    autoretry_for=(Exception,),
+    autoretry_for=_TRANSIENT_EXCEPTIONS,
     retry_backoff=True,
     retry_backoff_max=600,
     retry_jitter=True,
@@ -48,7 +71,7 @@ _SMS_TASK_RETRY = dict(
     bind=True,
     max_retries=5,
     default_retry_delay=30,
-    autoretry_for=(Exception,),
+    autoretry_for=_TRANSIENT_EXCEPTIONS,
     retry_backoff=True,
     retry_backoff_max=600,
     retry_jitter=True,
