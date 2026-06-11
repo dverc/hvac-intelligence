@@ -2,6 +2,7 @@ import { getApiBaseUrl } from "@/lib/api";
 
 export const TOKEN_KEY = "hvac_token";
 export const EMAIL_KEY = "hvac_user_email";
+export const ROLE_KEY = "hvac_user_role";
 export const ORG_ID_KEY = "hvac_org_id";
 
 export interface LoginResponse {
@@ -48,15 +49,24 @@ export function getStoredUserEmail(): string | null {
   return localStorage.getItem(EMAIL_KEY);
 }
 
+export function getStoredUserRole(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return localStorage.getItem(ROLE_KEY);
+}
+
 export function storeAuthSession(login: LoginResponse): void {
   localStorage.setItem(TOKEN_KEY, login.access_token);
   localStorage.setItem(EMAIL_KEY, login.email);
+  localStorage.setItem(ROLE_KEY, login.role);
   localStorage.setItem(ORG_ID_KEY, login.org_id);
 }
 
 export function clearAuthSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(EMAIL_KEY);
+  localStorage.removeItem(ROLE_KEY);
   localStorage.removeItem(ORG_ID_KEY);
 }
 
