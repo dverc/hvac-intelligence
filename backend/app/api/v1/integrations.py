@@ -209,7 +209,7 @@ async def jobber_sync(
             clients_synced = await jobber.sync_clients_to_customers(org_id)
         if sync_type in ("all", "users"):
             if sync_type == "all":
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
             users_synced = await jobber.sync_users_to_technicians(org_id)
         if sync_type in ("all", "jobs"):
             jobs_synced = await jobber.sync_jobs_to_dispatch(org_id, body.days_ahead)

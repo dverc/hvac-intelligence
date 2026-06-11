@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -38,7 +39,7 @@ query {
 
 CLIENTS_QUERY = """
 query GetClients($after: String) {
-  clients(first: 50, after: $after) {
+  clients(first: 10, after: $after) {
     nodes {
       id
       name
@@ -109,6 +110,35 @@ mutation CreateJob($input: JobCreateInput!) {
 _JOBBER_CANCELLED = frozenset(
     {"cancelled", "canceled", "archived", "closed", "completed"}
 )
+
+_THROTTLE_RETRY_SECONDS = 10
+_PAGINATION_DELAY_SECONDS = 3
+
+
+def _is_throttled(message: str) -> bool:
+    return "THROTTLED" in message.upper() or "throttled" in message.lower()
+
+
+async def _sleep_for_throttle_budget(payload: dict[str, Any]) -> None:
+    """Pause before the next request when Jobber query-cost budget is low."""
+    extensions = payload.get("extensions") or {}
+    cost = extensions.get("cost") or {}
+    throttle_status = cost.get("throttleStatus") or {}
+    currently_available = throttle_status.get("currentlyAvailable")
+    if currently_available is None:
+        return
+    try:
+        available = int(currently_available)
+    except (TypeError, ValueError):
+        return
+    if available < 2000:
+        sleep_seconds = (2000 - available) / 500
+        logger.info(
+            "Jobber throttle budget low (%s available), sleeping %.2fs",
+            available,
+            sleep_seconds,
+        )
+        await asyncio.sleep(sleep_seconds)
 
 
 def _jobber_external_id(prefix: str, raw_id: str) -> str:
@@ -191,24 +221,45 @@ class JobberService:
         variables: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run a GraphQL request with an explicit bearer token (OAuth callback safe)."""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                JOBBER_GRAPHQL_URL,
-                json={"query": query, "variables": variables or {}},
-                headers=self._graphql_headers(access_token),
-            )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 401:
-                    raise HTTPException(status_code=401, detail="Jobber API unauthorized") from exc
-                raise
-            payload = response.json()
+        for attempt in range(2):
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    JOBBER_GRAPHQL_URL,
+                    json={"query": query, "variables": variables or {}},
+                    headers=self._graphql_headers(access_token),
+                )
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 401:
+                        raise HTTPException(
+                            status_code=401, detail="Jobber API unauthorized"
+                        ) from exc
+                    if _is_throttled(exc.response.text) and attempt == 0:
+                        logger.warning(
+                            "Jobber GraphQL throttled (HTTP %s), retrying in %ss",
+                            exc.response.status_code,
+                            _THROTTLE_RETRY_SECONDS,
+                        )
+                        await asyncio.sleep(_THROTTLE_RETRY_SECONDS)
+                        continue
+                    raise
+                payload = response.json()
 
-        if payload.get("errors"):
-            logger.error("Jobber GraphQL errors: %s", payload["errors"])
-            raise ValueError(f"Jobber GraphQL error: {payload['errors']}")
-        return payload
+            if payload.get("errors"):
+                errors_str = str(payload["errors"])
+                if _is_throttled(errors_str) and attempt == 0:
+                    logger.warning(
+                        "Jobber GraphQL throttled in response errors, retrying in %ss",
+                        _THROTTLE_RETRY_SECONDS,
+                    )
+                    await asyncio.sleep(_THROTTLE_RETRY_SECONDS)
+                    continue
+                logger.error("Jobber GraphQL errors: %s", payload["errors"])
+                raise ValueError(f"Jobber GraphQL error: {payload['errors']}")
+            return payload
+
+        raise ValueError("Jobber GraphQL request failed after throttle retry")
 
     async def handle_oauth_callback(self, code: str, state: str) -> JobberToken:
         try:
@@ -438,6 +489,8 @@ class JobberService:
             if not page_info.get("hasNextPage"):
                 break
             cursor = page_info.get("endCursor")
+            await _sleep_for_throttle_budget(payload)
+            await asyncio.sleep(_PAGINATION_DELAY_SECONDS)
 
         await self.db.flush()
         return synced
