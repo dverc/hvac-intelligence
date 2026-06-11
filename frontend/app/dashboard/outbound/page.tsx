@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   ApiError,
+  buildDisclosureText,
   createOutboundCampaign,
   executeOutboundCampaign,
-  getDisclosurePreview,
   listBlockedAttempts,
   listOutboundCampaigns,
   previewEligibleCustomers,
@@ -14,6 +14,15 @@ import {
   type BlockedAttempt,
   type OutboundCampaign,
 } from "@/lib/api";
+import { getOrgName } from "@/lib/config";
+
+function resolveOrgDisplayName(): string {
+  const name = getOrgName();
+  if (name && name !== "HVAC Intelligence") {
+    return name;
+  }
+  return "Your HVAC Company";
+}
 
 const CAMPAIGN_TYPES = [
   { value: "REACTIVATION", label: "Reactivation" },
@@ -76,9 +85,9 @@ export default function OutboundPage() {
   }, [load]);
 
   useEffect(() => {
-    void getDisclosurePreview(form.disclosure_style).then((res) => {
-      setDisclosurePreview(res.disclosure_text);
-    });
+    setDisclosurePreview(
+      buildDisclosureText(resolveOrgDisplayName(), form.disclosure_style),
+    );
   }, [form.disclosure_style]);
 
   async function handlePreview() {

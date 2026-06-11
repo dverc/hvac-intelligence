@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 
 import { LogoutIcon } from "@/components/AuthShell";
 import { DashboardNav } from "@/components/DashboardNav";
-import { clearAuthSession, getAuthToken, getCurrentUser } from "@/lib/auth";
+import {
+  AuthError,
+  clearAuthSession,
+  getAuthToken,
+  getCurrentUser,
+  getStoredUserEmail,
+} from "@/lib/auth";
 import { getApiKeyConfigError, getOrgName } from "@/lib/config";
 
 export default function DashboardLayout({
@@ -36,24 +42,53 @@ export default function DashboardLayout({
   }, [signOutModalOpen]);
 
   useEffect(() => {
-    async function verifySession() {
-      const token = getAuthToken();
-      if (!token) {
-        router.replace("/login");
-        return;
-      }
+    console.log("layout mounted");
 
-      try {
-        const user = await getCurrentUser();
-        setUserEmail(user.email);
-        setReady(true);
-      } catch {
-        clearAuthSession();
-        router.replace("/login");
-      }
+    if (typeof window === "undefined") {
+      return;
     }
 
-    void verifySession();
+    let cancelled = false;
+
+    const token = getAuthToken();
+    console.log(
+      "[dashboard layout] token:",
+      token ? `${token.slice(0, 20)}...` : null,
+    );
+
+    if (!token) {
+      console.log("[dashboard layout] no token found, redirecting to /login");
+      router.replace("/login");
+      return;
+    }
+
+    setUserEmail(getStoredUserEmail());
+    setReady(true);
+
+    void (async () => {
+      try {
+        const user = await getCurrentUser();
+        if (cancelled) {
+          return;
+        }
+        console.log("[dashboard layout] /auth/me response:", user);
+        setUserEmail(user.email);
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        console.error("[dashboard layout] /auth/me error:", err);
+        if (err instanceof AuthError && err.status === 401) {
+          console.log("[dashboard layout] 401 from /auth/me, redirecting to /login");
+          clearAuthSession();
+          router.replace("/login");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   function handleSignOut() {

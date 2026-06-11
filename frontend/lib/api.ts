@@ -46,21 +46,21 @@ function authenticatedHeaders(): Record<string, string> {
   return headers;
 }
 
-function handleUnauthorized(status: number): void {
-  if (status === 401 && typeof window !== "undefined") {
-    localStorage.removeItem("hvac_token");
-    localStorage.removeItem("hvac_org_id");
-    window.location.href = "/login";
-  }
-}
-
 async function parseApiResponse<T>(
   response: Response,
   path: string,
   method: string,
 ): Promise<T> {
   if (!response.ok) {
-    handleUnauthorized(response.status);
+    if (response.status === 401) {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("auth_token");
+        localStorage.removeItem("hvac_token");
+        localStorage.removeItem("hvac_org_id");
+        window.location.href = "/login";
+      }
+      throw new ApiError(401, "Unauthorized");
+    }
     const body = await response.text();
     throw new ApiError(response.status, `${method} ${path} failed: ${body}`);
   }
@@ -273,7 +273,25 @@ export function getCustomerCounterfactuals(customerId: string) {
 }
 
 export function getModelHealth() {
-  return apiGetAuthenticated<ModelHealthResponse>("/api/v1/ml/model-health");
+  return apiGet<ModelHealthResponse>("/api/v1/ml/model-health");
+}
+
+/** Client-side mirror of backend get_disclosure_text — always includes AI + recording disclosure. */
+export function buildDisclosureText(
+  orgDisplayName: string,
+  disclosureStyle: string,
+): string {
+  const name = orgDisplayName.trim() || "Your HVAC Company";
+  if (disclosureStyle.toUpperCase() === "FORMAL") {
+    return (
+      `This call is being handled by an artificial intelligence system on behalf of ${name}. ` +
+      "This call is recorded. You have the right to speak with a human representative at any time."
+    );
+  }
+  return (
+    `Hi, this is an AI virtual assistant calling on behalf of ${name}. ` +
+    "This call may be recorded for quality assurance."
+  );
 }
 
 // ── Analytics ───────────────────────────────────────────────────────────────
@@ -810,7 +828,15 @@ export async function getImportTemplate(
     },
   );
   if (!response.ok) {
-    handleUnauthorized(response.status);
+    if (response.status === 401) {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("auth_token");
+        localStorage.removeItem("hvac_token");
+        localStorage.removeItem("hvac_org_id");
+        window.location.href = "/login";
+      }
+      throw new ApiError(401, "Unauthorized");
+    }
     const body = await response.text();
     throw new ApiError(
       response.status,
