@@ -70,10 +70,21 @@ class AdminOnboardingService:
             slug = f"{base_slug}-{suffix}"[:100]
             suffix += 1
 
+    async def _fetch_organization(self, org_id: uuid.UUID) -> Organization | None:
+        return (
+            await self.db.execute(
+                select(Organization)
+                .where(Organization.org_id == org_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+
     async def _get_settings(self, org_id: uuid.UUID) -> OrgSettings | None:
         return (
             await self.db.execute(
-                select(OrgSettings).where(OrgSettings.org_id == org_id)
+                select(OrgSettings)
+                .where(OrgSettings.org_id == org_id)
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
 
@@ -178,6 +189,7 @@ class AdminOnboardingService:
             await self.db.flush()
             admin_user_id = str(user.id)
 
+        await self.db.refresh(org)
         await self.db.refresh(settings)
         return AdminOrganizationCreateResponse(
             org_id=org.org_id,
@@ -189,10 +201,13 @@ class AdminOnboardingService:
         )
 
     async def get_organization(self, org_id: uuid.UUID) -> AdminOrganizationDetail:
-        org = await self.db.get(Organization, org_id)
+        org = await self._fetch_organization(org_id)
         if org is None:
             raise ValueError("Organization not found")
+        await self.db.refresh(org)
         settings = await self._get_settings(org_id)
+        if settings is not None:
+            await self.db.refresh(settings)
         return AdminOrganizationDetail(
             org_id=org.org_id,
             org_name=org.org_name,
@@ -263,6 +278,8 @@ class AdminOnboardingService:
             org.vapi_phone_number = body.vapi_phone_number
 
         await self.db.flush()
+        await self.db.refresh(org)
+        await self.db.refresh(settings)
         return await self.get_organization(org_id)
 
     async def create_user(
@@ -288,6 +305,7 @@ class AdminOnboardingService:
         )
         self.db.add(user)
         await self.db.flush()
+        await self.db.refresh(user)
         return AdminUserCreateResponse(
             user_id=str(user.id),
             email=user.email,
@@ -338,6 +356,7 @@ class AdminOnboardingService:
         )
         self.db.add(tech)
         await self.db.flush()
+        await self.db.refresh(tech)
         return AdminTechnicianOut(
             technician_id=tech.technician_id,
             full_name=tech.full_name,
@@ -372,6 +391,7 @@ class AdminOnboardingService:
         if org is None:
             raise ValueError("Organization not found")
         settings = await self._ensure_settings(org)
+        await self.db.refresh(settings)
         return OnboardingProgressOut(
             org_id=org_id,
             onboarding_completed=settings.onboarding_completed,
@@ -393,6 +413,7 @@ class AdminOnboardingService:
             if body.onboarding_completed:
                 settings.onboarding_step = max(settings.onboarding_step, 5)
         await self.db.flush()
+        await self.db.refresh(settings)
         return await self.get_onboarding(org_id)
 
     async def provision(self, org_id: uuid.UUID) -> ProvisionResponse:
@@ -440,6 +461,7 @@ class AdminOnboardingService:
             example_created = True
 
         await self.db.flush()
+        await self.db.refresh(org)
         await self.db.refresh(settings)
         return ProvisionResponse(
             org_id=org_id,
