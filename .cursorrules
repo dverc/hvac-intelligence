@@ -1,5 +1,8 @@
 # HVAC Intelligence Platform — Cursor Agent Rules
 
+## Law 0: Ground Truth
+Before ops commands, API paths, auth, or infra assumptions, read **`docs/CURSOR_PROJECT_NOTES.md`** (verified DB state, Celery queue bug, scheduling API, Vapi tools, env var names).
+
 ## Law 1: Specification Authority
 Always cross-reference `docs/PROJECT_SPEC.md` before generating any application logic or endpoints.
 

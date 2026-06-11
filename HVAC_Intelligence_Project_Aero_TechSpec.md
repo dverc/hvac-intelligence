@@ -2,6 +2,8 @@
 ## Technical Specification & Cursor Implementation Guide
 **Version:** 1.0.0 | **Status:** Implementation-Ready | **Classification:** Internal Engineering
 
+> **Operational ground truth (2026-06-11):** For current DB state, API paths (`/api/v1/scheduling/*`), auth (`JWT_SECRET_KEY`, dual JWT + API key), Celery queue bug, Vapi tool status, and verified org/user IDs, see [`docs/CURSOR_PROJECT_NOTES.md`](docs/CURSOR_PROJECT_NOTES.md). This spec may lag behind live ops notes.
+
 ---
 
 ## Table of Contents

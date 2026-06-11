@@ -1,6 +1,6 @@
 # Manual Verification Checklist (Outside Cursor)
 
-Last audited: **2026-06-04** (Vapi tools re-checked same day — 12/12 linked).
+Last audited: **2026-06-11** (ground truth in [`docs/CURSOR_PROJECT_NOTES.md`](./CURSOR_PROJECT_NOTES.md)).
 
 Only **remaining** manual steps are listed below. Completed work is summarized in [Verified complete](#verified-complete-do-not-repeat) — do not repeat those unless you reset the environment.
 
@@ -29,13 +29,8 @@ docker compose exec postgres psql -U hvac_user -d hvac_intel -c \
 
 ### 2. ML feature pipeline (Kafka + Celery)
 
-Postgres shows `feature_store = 0`. Uvicorn logs show `Kafka unavailable; dispatching Celery task directly` — Celery worker may not be running.
-
-- [ ] Start pipeline services:
-  ```bash
-  docker compose up -d kafka celery-worker
-  ```
-  Or run Celery manually from `backend/` (see `docs/RUNBOOK.md`).
+- [ ] Confirm six containers Up: `postgres`, `redis`, `kafka`, `zookeeper`, `celery-worker`, `celery-beat` (`docker compose ps`)
+- [ ] **Celery queue fix:** worker must use `-Q celery,features,scoring` or beat tasks (Jobber sync, batch rescore, outbound launcher) never run — see `docs/CURSOR_PROJECT_NOTES.md`
 - [ ] Place a live call (or replay call-end webhook); confirm:
   - [ ] `process_call_features` runs in Celery logs
   - [ ] Row appears in `feature_store`
@@ -50,7 +45,7 @@ Postgres shows `feature_store = 0`. Uvicorn logs show `Kafka unavailable; dispat
 
 ### 3. RAG live-call verification
 
-Mock index exists (`data/knowledge/.mock_vector_index.json`). No `rag_knowledge_query` execution seen in recent uvicorn logs.
+Mock index exists (`data/knowledge/.mock_vector_index.json`).
 
 - [ ] On a live call, ask a FAQ/pricing question; confirm `rag_knowledge_query` in uvicorn logs with retrieved context
 
@@ -63,25 +58,43 @@ Mock index exists (`data/knowledge/.mock_vector_index.json`). No `rag_knowledge_
 
 ### 4. Dashboard SSE live feed (browser)
 
-API auth works; SSE not manually verified in browser this session.
-
 - [ ] Open `/dashboard` → **Live Activity Feed** shows connected (green)
 - [ ] Trigger a call or batch rescore → event appears without refresh
 
 ---
 
-### 5. Observability (Grafana)
+### 5. Portal timezone (frontend bug)
 
-Prometheus/Grafana not running in Docker (only postgres + redis up). `/metrics` returns 200.
+- [ ] Backend returns appointment times in org timezone (`OrgSettings`) ✅
+- [ ] **Frontend still hardcodes `America/Los_Angeles`** in `frontend/lib/portal-format.ts` ❌ — verify display for non-Pacific org after fix
+
+---
+
+### 6. Pending Vapi dashboard tools
+
+12 tools linked in Vapi. Two more exist in code but **not yet added to Vapi dashboard**:
+
+- [ ] `transfer_call`
+- [ ] `check_service_area`
+
+Schemas: `docs/vapi_tool_schemas.md`
+
+---
+
+### 7. Timezone booking test (pending)
+
+- [ ] Make a test call booking **Marcus at 2–4 PM**; verify Google Calendar shows correct **PDT** (not 8 AM default)
+
+---
+
+### 8. Observability (Grafana)
 
 - [ ] `docker compose up -d prometheus grafana`
 - [ ] Build or import Grafana dashboard for: `vapi_webhook_total`, `tool_execution_latency_seconds`, `churn_scoring_latency_seconds`, `high_risk_accounts_total`, `saved_by_ai_total`, `rag_retrieval_latency_seconds`
 
 ---
 
-### 6. Production deployment & pre-production gates
-
-GitHub repo and CI are green. K8s and performance gates are not done.
+### 9. Production deployment & pre-production gates
 
 - [ ] **Kubernetes (if deploying):** copy `infra/k8s/secrets.yaml.template` → `secrets.yaml`, set ingress hostname, `kubectl apply`
 - [ ] **Secrets:** migrate from `.env` to AWS Secrets Manager / Vault for production
@@ -89,11 +102,11 @@ GitHub repo and CI are green. K8s and performance gates are not done.
 
 ---
 
-### 7. Optional live tool exercises
+### 10. Optional live tool exercises
 
-All 12 tools are linked; exercise these on live calls when convenient:
+All **12 Vapi-linked** tools; exercise on live calls when convenient:
 
-- [ ] `create_customer` — covered by step 1 (new-customer onboarding call)
+- [ ] `create_customer` — covered by step 1
 - [ ] `update_customer` — caller corrects address or phone mid-call
 - [ ] `update_dispatch` — caller changes or cancels a booking
 - [ ] `create_equipment` — register a unit for a new or existing customer
@@ -105,19 +118,19 @@ All 12 tools are linked; exercise these on live calls when convenient:
 
 Evidence sources noted in parentheses.
 
-### Environment & infrastructure
+### Environment & infrastructure (2026-06-11)
 
 | Item | Evidence |
 |------|----------|
 | Root `.env` created and populated | `.env` has all keys (Vapi, Pinecone, DB, API keys) |
 | `frontend/.env.local` with matching API key | `NEXT_PUBLIC_API_KEY` = `DASHBOARD_API_KEY` |
-| Postgres + Redis running | `docker compose ps` — both Up 24h+ |
-| Alembic at head | `alembic_version`: `014_org_drive_folder` |
-| DB seeded | 14 customers, 9 transcripts, 4 dispatch jobs, 6 churn scores |
+| **Six containers Up** | `docker compose ps`: postgres (`pgvector/pgvector:pg16`), redis, kafka, zookeeper, celery-worker, celery-beat |
+| Alembic at head | `029_org_settings_constraints` |
+| Daniel V seed customer | `customer_id` `18ea568c-5db5-4a41-ab1d-18314a9d54e4`, phone `+19493313190` |
+| Two orgs in DB | Demo `00000000-…0001`; **Bob** `bff79a29-…` (not "Bob's Plumbing") |
+| Admin login user | `daniel@hvacintelligence.com`, `users.id` `0b5a31f1-…`, role admin (register API, not migration) |
 | Health smoke | `curl localhost:8000/health` → 200 |
-| Backend running | uvicorn terminal 26, `--reload` on :8000 |
-| ngrok tunnel | terminal 23 → `stonework-congenial-booth.ngrok-free.dev` → :8000 |
-| Frontend running | `npm run dev` terminal 27; `/dashboard` → 200 |
+| Dashboard | `/dashboard/health` (not `/system-health`) |
 
 ### Vapi dashboard & live-call plumbing
 
@@ -126,57 +139,40 @@ Evidence sources noted in parentheses.
 | Assistant **HVAC Inbound Receptionist** | Vapi API; `VAPI_ASSISTANT_ID` in `.env` |
 | Phone +19498800687 → assistant attached | Vapi phone-number API |
 | Webhook URL → ngrok `/webhook/vapi` | Assistant + phone `server.url` |
-| Dashboard `firstMessage` with `{{customer_name}}`, `{{equipment_info}}` | Vapi assistant config |
-| System prompt with template variables + onboarding rules | Vapi `model.messages[0].content` |
-| **All 12 tools linked to assistant** | Vapi API 2026-06-04: `toolIds` count = 12, account tools = 12, 0 unlinked — `check_availability`, `create_customer`, `create_equipment`, `create_support_ticket`, `get_customer_info`, `get_equipment_info`, `lookup_service_info`, `query_churn_score`, `rag_knowledge_query`, `schedule_dispatch`, `update_customer`, `update_dispatch` |
-| Local HMAC bypass | `VAPI_WEBHOOK_HMAC_BYPASS=true`, `VAPI_WEBHOOK_SECRET=disabled` |
+| **12 tools linked in Vapi** | `check_availability`, `create_customer`, `create_equipment`, `create_support_ticket`, `get_customer_info`, `get_equipment_info`, `lookup_service_info`, `query_churn_score`, `rag_knowledge_query`, `schedule_dispatch`, `update_customer`, `update_dispatch` |
+| `transfer_call` / `check_service_area` | In `tool_executor.py`; **pending Vapi setup** |
 
-### Live calls & webhook (Phases 2, L, N, O partial)
+### Live calls & webhook
 
 | Item | Evidence |
 |------|----------|
-| Webhooks 200 OK, no 401 | ngrok + uvicorn logs 2026-06-03/04 |
-| `end-of-call-report` handled | uvicorn: `Vapi event: end-of-call-report` |
-| Transcripts persisted with enrichment | 4 live rows: `has_recording`, `has_summary`, `has_cost` = true |
-| `get_customer_info` tool executed | uvicorn: `Executing Vapi tool … name=get_customer_info` |
-| No `Unknown tool` errors | Recent logs clean |
-| Dispatch jobs from live calls | 3× `AC_NO_COOLING` for Daniel V (2026-06-04) |
-| Known-customer E2E (Daniel V +19493313190) | 4 live transcripts linked to customer `18ea568c…` |
+| Last fully successful documented call | **2026-06-03**, cost **$0.58** |
+| Stalled / failed follow-ups | `019e911d-4d3d` ($0.1232, phone without +1); `019e911e-9355` ($0.0018, hangup) |
+| Dashboard total calls | **21** (cumulative test calls) |
+| Known-customer E2E (Daniel V) | Transcripts linked to `18ea568c…` |
+| Dispatch jobs from live calls | Multiple `AC_NO_COOLING` for Daniel V |
 
-### Auth (Phase 3)
+### Auth
 
 | Item | Evidence |
 |------|----------|
-| `DASHBOARD_API_KEY` set | `.env` |
-| Unauthenticated API → 401 | `GET /api/v1/customers` → 401 |
-| Authenticated API → 200 | same with `X-API-Key` → 200 |
+| `DASHBOARD_API_KEY` + JWT on dashboard routes | `X-API-Key` + `Authorization: Bearer` |
+| `JWT_SECRET_KEY` in `.env` / CI | Not `SECRET_KEY` |
+| Admin role check | `role == "admin"` only; no `is_superuser` |
 
-### Transcript API + Call History (Phase 2)
-
-| Item | Evidence |
-|------|----------|
-| `GET …/customers/{id}/transcripts` | 4 items for Daniel V |
-| `GET /api/v1/calls/{call_id}` | Returns transcript JSON for live call |
-
-### RAG mock index (Phase 3 partial)
+### Onboarding UIs
 
 | Item | Evidence |
 |------|----------|
-| Mock FAQ index built | `data/knowledge/.mock_vector_index.json` exists (~49k lines) |
+| Self-service 6-step wizard | `/dashboard/onboarding` loads |
+| Admin 5-step wizard | `/dashboard/admin/onboarding/[org_id]` |
 
-### Tests & CI (Phases 7–8 partial)
-
-| Item | Evidence |
-|------|----------|
-| pytest suite | **145 passed** (2026-06-04) |
-| GitHub repo + CI green | `dverc/hvac-intelligence`; latest CI + Deploy success |
-| App metrics endpoint | `GET /metrics` → 200 |
-
-### Analytics API (Phase 5 partial)
+### Tests & CI
 
 | Item | Evidence |
 |------|----------|
-| `GET /api/v1/analytics/churn-distribution` | 200 with API key |
+| pytest suite | **320 passed** (2026-06-11) |
+| GitHub repo + CI green | `dverc/hvac-intelligence` |
 
 ---
 
@@ -184,7 +180,8 @@ Evidence sources noted in parentheses.
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/vapi_tool_schemas.md` | JSON for 4 new Vapi tools |
+| `docs/CURSOR_PROJECT_NOTES.md` | **Ground truth** for agents (DB, APIs, bugs) |
+| `docs/vapi_tool_schemas.md` | JSON for Vapi tools (incl. pending) |
 | `docs/RUNBOOK.md` | Celery, Kafka, indexing, batch rescore |
 | `docs/PRE_PRODUCTION_CHECKLIST.md` | Production gate criteria |
 | `HVAC_Intelligence_Project_Aero_TechSpec.md` | Full spec (Phases 0–8) |

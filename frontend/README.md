@@ -25,6 +25,8 @@ npm run dev
 
 Open http://localhost:3000 (redirects to `/dashboard`).
 
+Set `NEXT_PUBLIC_API_KEY` to match backend `DASHBOARD_API_KEY`. System health page: `/dashboard/health` (not `/system-health`). See `docs/CURSOR_PROJECT_NOTES.md` for auth and portal timezone notes.
+
 ## Tremor v3 note
 
 All Tremor imports use **`@tremor/react`** (not `@tremor/ui` or v2 paths). Client components that use Tremor charts must include `"use client"` at the top of the file.

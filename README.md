@@ -16,7 +16,9 @@ Project Aero is a production-shaped HVAC operations platform that couples a low-
 
 The voice path never blocks on ML inference. Call-end events publish to Kafka (`call.features`); Celery workers extract features, upsert `feature_store`, and write `churn_scores` asynchronously. A Next.js dashboard consumes REST analytics and an SSE churn-event stream so operators see risk movement, cohorts, and retention outcomes in near real time.
 
-Multi-tenant organizations isolate data in PostgreSQL and Pinecone (`{org_slug}::{namespace}`). New business clients can be onboarded via `/dashboard/onboarding` (CSV import, knowledge upload, Google Drive sync, agent settings) without engineering involvement.
+Multi-tenant organizations isolate data in PostgreSQL and Pinecone (`{org_slug}::{namespace}`). New business clients can be onboarded via **`/dashboard/onboarding`** (6-step self-service wizard) or the **admin 5-step wizard** at `/dashboard/admin/onboarding/[org_id]` (CSV import, knowledge upload, Google Drive sync, agent settings).
+
+**Vapi:** 12 tools are linked in the Vapi dashboard; `transfer_call` and `check_service_area` are implemented in code but pending Vapi dashboard setup (see `docs/vapi_tool_schemas.md`).
 
 ---
 
@@ -143,7 +145,8 @@ Multi-tenant organizations isolate data in PostgreSQL and Pinecone (`{org_slug}:
    | Kafka + `celery-worker` in compose | End-to-end `call.features` → scoring without dev fallback |
    | `ml/artifacts/*.pkl` | Non–`model_not_trained` churn scores |
 
-3. **Start data services:** `docker compose up -d postgres redis`
+3. **Start data services:** `docker compose up -d postgres redis kafka zookeeper celery-worker celery-beat`
+   - Postgres uses `pgvector/pgvector:pg16`. Worker should listen on `-Q celery,features,scoring` for beat tasks (see `docs/CURSOR_PROJECT_NOTES.md`).
 4. **Migrate:** `cd backend && alembic upgrade head`
 5. **Seed:** `python scripts/seed_database.py` (from repo root)
 6. **Index FAQs (mock):** `python scripts/index_knowledge_base.py --namespace faq_general --source data/knowledge/faqs/ --mock`
@@ -153,6 +156,8 @@ Multi-tenant organizations isolate data in PostgreSQL and Pinecone (`{org_slug}:
 **Dashboard at http://localhost:3000 · API docs at http://localhost:8000/docs**
 
 Set `NEXT_PUBLIC_API_KEY` in `frontend/.env.local` to the same value as `DASHBOARD_API_KEY`.
+
+**Login:** users are not seeded by migrations. After a fresh DB, register an admin with `POST /api/v1/auth/register` and `X-API-Key` header (see `docs/RUNBOOK.md`). JWT signing uses **`JWT_SECRET_KEY`** (not `SECRET_KEY`).
 
 ### Dashboard routes
 
@@ -165,18 +170,20 @@ Set `NEXT_PUBLIC_API_KEY` in `frontend/.env.local` to the same value as `DASHBOA
 | `/dashboard/dispatch` | Dispatch board |
 | `/dashboard/integrations` | Google Calendar + Jobber |
 | `/dashboard/import` | CSV import + Drive sync |
-| `/dashboard/admin` | All organizations (super-admin) |
-| `/dashboard/onboarding` | Guided new-client wizard |
-| `/dashboard/health` | System health & metrics |
+| `/dashboard/admin` | Admin panel |
+| `/dashboard/admin/organizations` | Client org list |
+| `/dashboard/admin/onboarding` | Admin onboarding queue |
+| `/dashboard/admin/onboarding/[org_id]` | Admin 5-step onboarding wizard |
+| `/dashboard/onboarding` | Self-service 6-step onboarding wizard |
+| `/dashboard/health` | System health & metrics (not `/dashboard/system-health`) |
 
 ### Onboard a new business client
 
-1. Open `/dashboard/onboarding` (or **Onboard New Client** on `/dashboard/admin`).
-2. Create the organization (business phone maps to Vapi tenant routing).
-3. Import customers/equipment via CSV (optional).
-4. Upload knowledge documents or connect Google Drive.
-5. Configure agent prompt, first message, and issue taxonomy.
-6. Add the 12 Vapi tools listed on the completion screen (`docs/vapi_tool_schemas.md`).
+**Self-service (6 steps):** `/dashboard/onboarding` — Business Details → Import Customers → Import Equipment → Knowledge Base → Configure Agent → Complete.
+
+**Admin (5 steps):** `/dashboard/admin/organizations` → Add client → `/dashboard/admin/onboarding/[org_id]`.
+
+Link the **12 Vapi dashboard tools** on completion (`docs/vapi_tool_schemas.md`). Two additional tools (`transfer_call`, `check_service_area`) are in code but pending Vapi setup.
 
 Re-index existing mock vectors after upgrading from flat namespaces:
 
@@ -242,9 +249,11 @@ Coverage gate: **60%** (see `backend/.coveragerc` for omitted infrastructure ent
 
 ## API summary (dashboard-authenticated)
 
-All `/api/v1/*` routes except `/health`, `/webhook/vapi`, and OAuth callbacks require header `X-API-Key: $DASHBOARD_API_KEY`.
+Protected `/api/v1/*` routes require **both** `X-API-Key: $DASHBOARD_API_KEY` **and** `Authorization: Bearer <JWT>` (exceptions: `/api/v1/portal/*`, `/api/v1/stream/*`, `/webhook/vapi`, OAuth callbacks).
 
-Notable groups: `customers`, `churn`, `analytics`, `knowledge`, `scheduling`, `integrations`, `imports` (CSV + Drive), `organizations`, `system/health`.
+Notable groups: `customers`, `churn`, `analytics`, `knowledge`, **`scheduling`** (dispatch jobs — no `dispatch.py`; jobs created via Vapi `schedule_dispatch` only), `integrations`, `imports` (CSV + Drive), `organizations`, `outbound`, `admin`, `system/health`.
+
+Ground truth: [`docs/CURSOR_PROJECT_NOTES.md`](./docs/CURSOR_PROJECT_NOTES.md).
 
 ## Roadmap
 
@@ -259,5 +268,6 @@ Notable groups: `customers`, `churn`, `analytics`, `knowledge`, `scheduling`, `i
 | Doc | Description |
 |-----|-------------|
 | [`HVAC_Intelligence_Project_Aero_TechSpec.md`](./HVAC_Intelligence_Project_Aero_TechSpec.md) | Full system spec (schemas, APIs, phases) |
+| [`docs/CURSOR_PROJECT_NOTES.md`](./docs/CURSOR_PROJECT_NOTES.md) | **Ground truth** — DB state, API paths, known bugs |
 | [`docs/RUNBOOK.md`](./docs/RUNBOOK.md) | Operations: Celery, Kafka, batch rescore, observability |
 | [`docs/PRE_PRODUCTION_CHECKLIST.md`](./docs/PRE_PRODUCTION_CHECKLIST.md) | Production gate criteria |

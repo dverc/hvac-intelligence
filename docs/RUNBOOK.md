@@ -1,14 +1,27 @@
 # HVAC Intelligence (Project Aero) — Operations Runbook
 
+> **Ground truth:** see [`docs/CURSOR_PROJECT_NOTES.md`](./CURSOR_PROJECT_NOTES.md) for verified DB state, API paths, and known bugs.
+
 ## Startup sequence (local)
 
-1. `docker compose up -d postgres redis` (add `celery-worker` for background tasks).
-2. `cd backend && alembic upgrade head`
+1. `docker compose up -d postgres redis kafka zookeeper celery-worker celery-beat`
+   - Postgres image: `pgvector/pgvector:pg16`
+   - Typical running set: postgres, redis, kafka, zookeeper, celery-worker, celery-beat (6 containers)
+2. `cd backend && alembic upgrade head` (head: `029_org_settings_constraints`)
 3. `python scripts/seed_database.py` (repo root)
 4. Optional: `python backend/scripts/migrate_pinecone_namespaces.py --mock`
 5. `cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
-6. `cd frontend && npm run dev`
+6. `cd frontend && npm run dev` — set `NEXT_PUBLIC_API_KEY` = `DASHBOARD_API_KEY` in `frontend/.env.local`
 7. Optional tunnel: `ngrok http 8000` for Vapi/Google/Jobber OAuth callbacks.
+
+**Login user is not seeded.** After a fresh DB, create admin via:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H "X-API-Key: $DASHBOARD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"YourPass123!","org_id":"00000000-0000-4000-8000-000000000001","role":"admin"}'
+```
 
 If port 8000 is in use: `lsof -ti:8000 | xargs kill -9`
 
@@ -29,7 +42,14 @@ Restore: `docker compose exec -T postgres psql -U hvac_user hvac_intel < backup.
 
 ## Seed a new tenant
 
-Prefer the UI: `/dashboard/onboarding`. API alternative:
+Two onboarding UIs (both functional):
+
+| Route | Steps |
+|-------|-------|
+| `/dashboard/onboarding` | 6-step self-service: Business Details → Import Customers → Import Equipment → Knowledge Base → Configure Agent → Complete |
+| `/dashboard/admin/onboarding/[org_id]` | 5-step admin wizard (after creating org in Organizations) |
+
+API alternative (organizations):
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/organizations \
@@ -38,7 +58,7 @@ curl -X POST http://localhost:8000/api/v1/organizations \
   -d '{"org_name":"Acme HVAC","slug":"acme-hvac","industry":"hvac","business_phone":"+15551234567"}'
 ```
 
-## Celery Beat schedules (5 tasks)
+## Celery Beat schedules (8 tasks)
 
 | Task | Schedule |
 |------|----------|
@@ -47,8 +67,13 @@ curl -X POST http://localhost:8000/api/v1/organizations \
 | `sync_google_calendars` | Every 4 hours |
 | `sync_jobber_data` | Every 6 hours |
 | `sync_google_drive_folders` | Every 30 minutes |
+| `send_weekly_client_reports` | Mondays 08:00 UTC |
+| `check_model_drift_and_retrain` | Daily 03:00 UTC |
+| `check_and_launch_campaigns` | Daily 10:00 UTC |
 
-Start beat: `cd backend && celery -A app.pipeline.celery_app beat --loglevel=info`
+Start beat: `docker compose up -d celery-beat` or `cd backend && celery -A app.pipeline.celery_app beat --loglevel=info`
+
+**Known bug:** beat tasks enqueue to the default `celery` queue, but `docker-compose.yml` runs the worker with `-Q features,scoring` only. Beat tasks (Jobber sync, outbound launcher, batch rescore, etc.) **will not run** until the worker also consumes `celery`. Fix: `-Q celery,features,scoring`. See `docs/CURSOR_PROJECT_NOTES.md`.
 
 ## Local development (end-to-end)
 
@@ -90,10 +115,17 @@ docker compose up celery-worker
 
 **Manual** (from `backend/` with `.env` loaded):
 ```bash
-celery -A app.pipeline.celery_app worker -Q features,scoring -c 4 --loglevel=info
+# Include celery queue so beat-scheduled tasks are consumed (see known bug above)
+celery -A app.pipeline.celery_app worker -Q celery,features,scoring -c 4 --loglevel=info
 ```
 
-Queues: `features` (`process_call_features`), `scoring` (`batch_rescore_customers`).
+Queues:
+
+| Queue | Tasks |
+|-------|-------|
+| `features` | `process_call_features` |
+| `scoring` | (reserved; most scoring uses default queue) |
+| `celery` (default) | All beat tasks, `execute_outbound_campaign`, etc. |
 
 ---
 
@@ -171,6 +203,25 @@ Useful queries:
 
 ---
 
+## Dispatch / scheduling API
+
+- **Router file:** `backend/app/api/v1/scheduling.py` (no `dispatch.py`)
+- **Prefix:** `/api/v1/scheduling/*`
+- **List jobs:** `GET /api/v1/scheduling/jobs?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
+- **Create jobs:** only via Vapi `schedule_dispatch` tool — there is no `POST /scheduling/jobs`
+
+Dashboard dispatch board: `/dashboard/dispatch` · System health: `/dashboard/health` (not `/dashboard/system-health`).
+
+---
+
+## Auth & env vars
+
+- JWT signing: **`JWT_SECRET_KEY`** (not `SECRET_KEY`)
+- Dashboard API: requires **JWT Bearer + `X-API-Key`** on `/api/v1/*` (except portal, stream, webhooks)
+- `users` table primary key column: **`id`** (not `user_id`)
+
+---
+
 ## Common failure modes
 
 | Symptom | Likely cause | Remediation |
@@ -178,7 +229,7 @@ Useful queries:
 | `401` on `/webhook/vapi` | HMAC mismatch | Use raw JSON body; header `x-vapi-signature` = `sha256=<hex>` of body with `VAPI_WEBHOOK_SECRET`. |
 | Churn always `model_not_trained` | Missing `ml/artifacts/*.pkl` | Train model or accept feature-only path until artifacts exist. |
 | RAG returns empty | Index not built | Run `scripts/index_knowledge_base.py --mock`. |
-| Celery tasks never run | Redis down / worker not started | `docker compose up redis celery-worker`; check `REDIS_URL`. |
+| Celery tasks never run | Redis down / worker not started / wrong queue | `docker compose up redis celery-worker`; check `REDIS_URL`. Worker must listen on `celery` queue for beat tasks — use `-Q celery,features,scoring`. |
 | Features not scoring after call | Kafka consumer off | Start `kafka_consumer` or rely on dev Celery fallback on call-end. |
 | SSE disconnects | Proxy timeout | Ingress annotations set 3600s for `/api/v1/stream/*`; ensure nginx buffering off for SSE. |
 | Alembic fails on `vector` | pgvector missing | Use `pgvector/pgvector:pg16` image (compose/K8s Postgres). |

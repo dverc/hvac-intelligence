@@ -2,7 +2,14 @@
 
 Manual reference for configuring the HVAC Intelligence voice assistant in the [Vapi dashboard](https://dashboard.vapi.ai). Add each tool under **Assistant → Tools → Function**.
 
-Existing tools (already configured): `get_customer_info`, `get_equipment_info`, `schedule_dispatch`, `query_churn_score`, `rag_knowledge_query`, `create_support_ticket`.
+## Tool status (verified 2026-06-11)
+
+| Status | Tools |
+|--------|-------|
+| **Linked in Vapi (12)** | `get_customer_info`, `get_equipment_info`, `schedule_dispatch`, `query_churn_score`, `rag_knowledge_query`, `create_support_ticket`, `create_customer`, `update_customer`, `create_equipment`, `update_dispatch`, `lookup_service_info`, `check_availability` |
+| **Built in code, pending Vapi setup (2)** | `transfer_call`, `check_service_area` — handlers in `backend/app/services/tool_executor.py`; schemas below |
+
+Dispatch jobs are created only via `schedule_dispatch` (no REST `POST /scheduling/jobs`). See `docs/CURSOR_PROJECT_NOTES.md`.
 
 ---
 
