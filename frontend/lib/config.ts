@@ -7,6 +7,11 @@ export function getOrgName(): string {
   return process.env.NEXT_PUBLIC_ORG_NAME?.trim() || "HVAC Intelligence";
 }
 
+export function getSupportPhone(): string | undefined {
+  const phone = process.env.NEXT_PUBLIC_SUPPORT_PHONE?.trim();
+  return phone || undefined;
+}
+
 export function getDashboardOrgId(): string {
   return (
     process.env.NEXT_PUBLIC_DASHBOARD_ORG_ID?.trim() ||

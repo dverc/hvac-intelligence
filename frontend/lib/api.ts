@@ -1072,6 +1072,99 @@ export function getChurnEventsStreamUrl() {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+// ── Customer portal (public, no auth) ───────────────────────────────────────
+
+export interface PortalAppointment {
+  id: string;
+  scheduled_window_start: string | null;
+  scheduled_window_end: string | null;
+  issue_type: string;
+  issue_description: string | null;
+  job_status: string;
+  technician_name: string | null;
+  job_number: string;
+}
+
+export interface PortalIdentifyResult {
+  found: boolean;
+  customer_id?: string;
+  name?: string;
+  upcoming_appointments: PortalAppointment[];
+  past_appointments: PortalAppointment[];
+}
+
+export interface PortalAppointmentsResult {
+  customer_id: string;
+  name: string;
+  upcoming_appointments: PortalAppointment[];
+  past_appointments: PortalAppointment[];
+}
+
+async function portalFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    cache: "no-store",
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new ApiError(response.status, `${init?.method ?? "GET"} ${path} failed: ${body}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export function portalIdentify(phone: string) {
+  return portalFetch<PortalIdentifyResult>("/api/v1/portal/identify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone }),
+  });
+}
+
+export function portalGetAppointments(customerId: string) {
+  return portalFetch<PortalAppointmentsResult>(
+    `/api/v1/portal/appointments/${customerId}`,
+  );
+}
+
+export function portalRequestService(payload: {
+  phone: string;
+  name?: string;
+  issue_type: string;
+  description?: string;
+  preferred_date?: string;
+  preferred_time_window?: string;
+}) {
+  return portalFetch<{ success: boolean; ticket_number: string; message: string }>(
+    "/api/v1/portal/request",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function portalRescheduleRequest(payload: {
+  customer_id: string;
+  appointment_id: string;
+  preferred_date: string;
+  preferred_time_window: string;
+  reason?: string;
+}) {
+  return portalFetch<{ success: boolean; message: string }>(
+    "/api/v1/portal/reschedule-request",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function defaultAnalyticsRange(): { start: string; end: string } {
   const end = new Date();
   const start = new Date();

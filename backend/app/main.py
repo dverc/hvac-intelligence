@@ -39,6 +39,13 @@ async def _rate_limit_exceeded_handler(
     )
 
 
+async def verify_dashboard_api_key_except_portal(request: Request) -> None:
+    """Dashboard API key for staff routes; customer portal is public (no JWT, no API key)."""
+    if request.url.path.startswith("/api/v1/portal"):
+        return
+    await verify_dashboard_api_key(request)
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
@@ -117,7 +124,7 @@ async def health() -> JSONResponse:
 app.include_router(vapi_router)
 app.include_router(google_oauth_router)
 app.include_router(jobber_oauth_router)
-app.include_router(api_router, dependencies=[Depends(verify_dashboard_api_key)])
+app.include_router(api_router, dependencies=[Depends(verify_dashboard_api_key_except_portal)])
 
 Instrumentator().instrument(app)
 
