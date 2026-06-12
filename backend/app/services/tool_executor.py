@@ -234,13 +234,18 @@ def _tool_response(
     data: dict | None = None,
     error_code: str | None = None,
     message: str | None = None,
+    *,
+    legacy_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "success": success,
         "data": data,
         "error_code": error_code,
         "message": message,
     }
+    if legacy_fields:
+        payload.update(legacy_fields)
+    return payload
 
 
 def _tool_response_json(
@@ -248,8 +253,18 @@ def _tool_response_json(
     data: dict | None = None,
     error_code: str | None = None,
     message: str | None = None,
+    *,
+    legacy_fields: dict[str, Any] | None = None,
 ) -> str:
-    return json.dumps(_tool_response(success, data, error_code, message))
+    return json.dumps(
+        _tool_response(
+            success,
+            data,
+            error_code,
+            message,
+            legacy_fields=legacy_fields,
+        )
+    )
 
 
 def _normalize_error_code(code: str | None) -> str | None:
@@ -648,10 +663,14 @@ class ToolExecutor:
                         )
                     )
                     avail_data = availability.get("data") or {}
+                    available_slots = avail_data.get(
+                        "available_slots",
+                        availability.get("available_slots", []),
+                    )
                     return _tool_response_json(
                         success=False,
                         data={
-                            "available_slots": avail_data.get("available_slots", []),
+                            "available_slots": available_slots,
                             "availability_message": availability.get("message"),
                         },
                         error_code="SLOT_TAKEN",
@@ -659,6 +678,7 @@ class ToolExecutor:
                             "That time slot was just taken by another booking. "
                             "Let me check what else is available."
                         ),
+                        legacy_fields={"available_slots": available_slots},
                     )
             else:
                 result = await self.dispatch_service.create_job(**create_kwargs)
@@ -672,6 +692,11 @@ class ToolExecutor:
                     ),
                     message=result.get("message")
                     or str(result.get("error", "Failed to schedule dispatch")),
+                    legacy_fields=(
+                        {"job_id": result.get("job_id")}
+                        if result.get("job_id") is not None
+                        else None
+                    ),
                 )
             job_id = result.get("job_id")
             if job_id:
@@ -786,6 +811,7 @@ class ToolExecutor:
                 success=True,
                 data=result,
                 message=result.get("human_readable") or "Dispatch scheduled successfully.",
+                legacy_fields={"job_id": result.get("job_id")},
             )
         finally:
             await redis_client.aclose()
@@ -833,6 +859,7 @@ class ToolExecutor:
                     "Would you like me to check further out, or would you prefer "
                     "to call back later?"
                 ),
+                legacy_fields={"available_slots": []},
             )
 
         formatted = [
@@ -856,6 +883,7 @@ class ToolExecutor:
                 f"The earliest is {earliest['slot_label']} with "
                 f"{earliest['technician']}. Which works best for you?"
             ),
+            legacy_fields={"available_slots": formatted},
         )
 
     async def execute_query_churn_score(self, **kwargs: Any) -> str:
@@ -878,6 +906,10 @@ class ToolExecutor:
             success=True,
             data=score,
             message=f"Churn risk tier: {score.get('risk_tier', 'UNKNOWN')}.",
+            legacy_fields={
+                "churn_score": score.get("churn_probability"),
+                "risk_level": score.get("risk_tier"),
+            },
         )
 
     async def execute_get_customer_info(self, **kwargs: Any) -> str:
@@ -896,6 +928,10 @@ class ToolExecutor:
                         if cached_profile.get("found")
                         else "Customer not found."
                     ),
+                    legacy_fields={
+                        "found": cached_profile.get("found"),
+                        "customer_id": cached_profile.get("customer_id"),
+                    },
                 )
 
         profile = await self.customer_service.get_customer_info(
@@ -916,6 +952,10 @@ class ToolExecutor:
                 if profile.get("found")
                 else "Customer not found."
             ),
+            legacy_fields={
+                "found": profile.get("found"),
+                "customer_id": profile.get("customer_id"),
+            },
         )
 
     async def execute_get_equipment_info(self, **kwargs: Any) -> str:
@@ -1004,6 +1044,7 @@ class ToolExecutor:
             success=True,
             data={"retrieved_context": sanitized_chunks},
             message=f"Retrieved {len(sanitized_chunks)} knowledge chunk(s).",
+            legacy_fields={"retrieved_context": sanitized_chunks},
         )
 
     async def execute_lookup_service_info(self, **kwargs: Any) -> str:

@@ -13,6 +13,35 @@ Dispatch jobs are created only via `schedule_dispatch` (no REST `POST /schedulin
 
 ---
 
+## Tool response envelope (backend)
+
+All webhook tool handlers return a **standard envelope** from `backend/app/services/tool_executor.py`:
+
+```json
+{
+  "success": true,
+  "data": { },
+  "error_code": null,
+  "message": "Human-readable summary for the assistant."
+}
+```
+
+On failure, `success` is `false`, `error_code` is set (e.g. `NO_AVAILABILITY`), and `message` explains what to say next.
+
+**Backward compatibility:** High-traffic tools also duplicate key fields at the **top level** (same values as inside `data`) so assistants trained on flat responses still find them:
+
+| Tool | Top-level shim fields (in addition to `data`) |
+|------|-----------------------------------------------|
+| `rag_knowledge_query` | `retrieved_context` |
+| `check_availability` | `available_slots` |
+| `get_customer_info` | `found`, `customer_id` |
+| `schedule_dispatch` | `job_id` |
+| `query_churn_score` | `churn_score` (probability), `risk_level` (tier) |
+
+Prefer reading from `data.*` for new prompts; top-level copies are additive and may be removed in a future major version.
+
+---
+
 ## create_customer
 
 Create a new customer account when the caller is not in the CRM or wants a new account.

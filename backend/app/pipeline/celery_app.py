@@ -23,8 +23,20 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    # Explicit queue routing — worker consumes `-Q celery,features,scoring`.
+    # Beat-scheduled orchestration tasks use `celery`; feature ingest uses
+    # `features`; parallel churn rescoring uses `scoring`.
     task_routes={
         "app.pipeline.tasks.process_call_features": {"queue": "features"},
+        "app.pipeline.tasks.batch_rescore_customers": {"queue": "celery"},
+        "app.pipeline.tasks.on_batch_rescore_complete": {"queue": "celery"},
+        "app.pipeline.tasks.check_model_drift_and_retrain": {"queue": "celery"},
+        "app.pipeline.tasks.sync_technician_schedules": {"queue": "celery"},
+        "app.pipeline.tasks.sync_google_calendars": {"queue": "celery"},
+        "app.pipeline.tasks.sync_jobber_data": {"queue": "celery"},
+        "app.pipeline.tasks.sync_google_drive_folders": {"queue": "celery"},
+        "app.pipeline.tasks.send_weekly_client_reports": {"queue": "celery"},
+        "app.tasks.celery_tasks.check_and_launch_campaigns": {"queue": "celery"},
         "app.pipeline.tasks.rescore_customers_chunk": {"queue": "scoring"},
     },
     imports=("app.pipeline.tasks", "app.tasks.celery_tasks"),
@@ -32,34 +44,42 @@ celery_app.conf.update(
         "sync-technician-schedules": {
             "task": "app.pipeline.tasks.sync_technician_schedules",
             "schedule": crontab(minute=0, hour="*/2"),
+            "options": {"queue": "celery"},
         },
         "batch-rescore-customers": {
             "task": "app.pipeline.tasks.batch_rescore_customers",
             "schedule": crontab(minute=0, hour=2),
+            "options": {"queue": "celery"},
         },
         "sync-google-calendars": {
             "task": "app.pipeline.tasks.sync_google_calendars",
             "schedule": crontab(minute=0, hour="*/4"),
+            "options": {"queue": "celery"},
         },
         "sync-jobber-data": {
             "task": "app.pipeline.tasks.sync_jobber_data",
             "schedule": crontab(minute=0, hour="*/6"),
+            "options": {"queue": "celery"},
         },
         "sync-google-drive": {
             "task": "app.pipeline.tasks.sync_google_drive_folders",
             "schedule": crontab(minute="*/30"),
+            "options": {"queue": "celery"},
         },
         "send-weekly-client-reports": {
             "task": "app.pipeline.tasks.send_weekly_client_reports",
             "schedule": crontab(hour=8, minute=0, day_of_week=1),
+            "options": {"queue": "celery"},
         },
         "check-model-drift-and-retrain": {
             "task": "app.pipeline.tasks.check_model_drift_and_retrain",
             "schedule": crontab(minute=0, hour=3),
+            "options": {"queue": "celery"},
         },
         "check-and-launch-outbound-campaigns": {
             "task": "app.tasks.celery_tasks.check_and_launch_campaigns",
             "schedule": crontab(minute=0, hour=10),
+            "options": {"queue": "celery"},
         },
     },
 )
