@@ -8,8 +8,8 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.logging_config import get_call_id
 from app.core.cache import (
     CUSTOMER_CACHE_TTL,
@@ -191,11 +191,70 @@ class ToolExecutor:
     def db(self) -> AsyncSession:
         return self.customer_service.db
 
+    def _clone_for_session(self, session: AsyncSession) -> ToolExecutor:
+        """Build a tenant-scoped executor whose services share one isolated session."""
+        customer_service = CustomerService(session)
+        clone = ToolExecutor(
+            customer_service=customer_service,
+            dispatch_service=DispatchService(session),
+            churn_service=ChurnService(session),
+            ticket_service=TicketService(session),
+            rag_retriever=self.rag_retriever,
+            service_catalog_service=ServiceCatalogService(session),
+            availability_service=AvailabilityService(session),
+        )
+        clone.set_tenant(self.org_id, self.org_settings, self.org_slug)
+        return clone
+
+    async def _run_with_isolated_session(
+        self,
+        tool_call: dict[str, Any],
+    ) -> dict[str, str]:
+        """Run one tool call on a dedicated AsyncSession (safe for asyncio.gather)."""
+        bind = self.db.get_bind()
+        if isinstance(bind, Engine):
+            # Production: pool checkout — each parallel tool call commits independently.
+            session_factory = async_sessionmaker(
+                bind, class_=AsyncSession, expire_on_commit=False
+            )
+            async with session_factory() as session:
+                try:
+                    isolated = self._clone_for_session(session)
+                    result = await isolated._execute_single(tool_call)
+                    await session.commit()
+                    return result
+                except Exception:
+                    await session.rollback()
+                    raise
+
+        # Tests use a connection-bound parent session; sibling session + savepoint
+        # shares the fixture transaction without concurrent session corruption.
+        connection = await self.db.connection()
+        async with AsyncSession(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        ) as session:
+            isolated = self._clone_for_session(session)
+            return await isolated._execute_single(tool_call)
+
     async def execute_batch(self, tool_call_list: list[dict[str, Any]]) -> list[dict[str, str]]:
-        tasks = [self._execute_single(tc) for tc in tool_call_list]
+        # batch_mode=True gives each concurrent gather task its own AsyncSession.
+        tasks = [self._execute_single(tc, batch_mode=True) for tc in tool_call_list]
         return await asyncio.gather(*tasks)
 
-    async def _execute_single(self, tool_call: dict[str, Any]) -> dict[str, str]:
+    async def _execute_single(
+        self,
+        tool_call: dict[str, Any],
+        *,
+        batch_mode: bool = False,
+    ) -> dict[str, str]:
+        if batch_mode:
+            # SQLAlchemy AsyncSession is not safe for concurrent coroutine use.
+            # Vapi may send multiple tool calls in one webhook; asyncio.gather runs
+            # them in parallel, so each call needs its own session and commit scope.
+            return await self._run_with_isolated_session(tool_call)
+
         tool_call_id, tool_name, args = _parse_vapi_tool_call(tool_call)
         logger.info(
             "Executing Vapi tool call id=%s call_id=%s name=%s args=%s",

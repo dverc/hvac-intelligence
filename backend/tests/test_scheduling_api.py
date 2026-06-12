@@ -114,51 +114,54 @@ async def test_get_scheduled_jobs(auth_client, seeded_customer):
 async def test_completed_dispatch_jobs_sorted_by_completion_date(
     auth_client, db_session, seeded_customer
 ):
+    from zoneinfo import ZoneInfo
+
     from app.models.dispatch_job import DispatchJob
 
-    now = datetime.now(timezone.utc)
-    older_created = now - timedelta(days=21)
+    # API filters by completion date in org timezone (default America/Los_Angeles).
+    org_tz = ZoneInfo("America/Los_Angeles")
+    org_today = datetime.now(org_tz).date()
+    completion_newer = datetime.combine(org_today, time(17, 30), tzinfo=org_tz)
+    completion_older = datetime.combine(org_today, time(9, 0), tzinfo=org_tz)
+    job_newer = "DX-COMP-SORT-NEWER"
+    job_older = "DX-COMP-SORT-OLDER"
+
     customer = seeded_customer["customer"]
     tech_id = uuid.UUID(seeded_customer["technician_id"])
 
-    completed_first = DispatchJob(
+    newer_job = DispatchJob(
         org_id=SEED_ORG_ID,
-        job_number=f"DX-COMP-{uuid.uuid4().hex[:6].upper()}",
+        job_number=job_newer,
         customer_id=customer.customer_id,
         technician_id=tech_id,
         issue_type="AC_FAILURE",
         job_status="COMPLETED",
-        scheduled_window_start=older_created,
-        scheduled_window_end=older_created + timedelta(hours=2),
-        actual_completion=now,
+        scheduled_window_start=completion_newer - timedelta(hours=2),
+        scheduled_window_end=completion_newer,
+        actual_completion=completion_newer,
         created_by="TEST",
     )
-    completed_second = DispatchJob(
+    older_job = DispatchJob(
         org_id=SEED_ORG_ID,
-        job_number=f"DX-COMP-{uuid.uuid4().hex[:6].upper()}",
+        job_number=job_older,
         customer_id=customer.customer_id,
         technician_id=tech_id,
         issue_type="MAINTENANCE",
         job_status="COMPLETED",
-        scheduled_window_start=now - timedelta(hours=4),
-        scheduled_window_end=now - timedelta(hours=2),
-        actual_completion=now - timedelta(hours=3),
+        scheduled_window_start=completion_older - timedelta(hours=2),
+        scheduled_window_end=completion_older,
+        actual_completion=completion_older,
         created_by="TEST",
     )
-    db_session.add(completed_first)
-    db_session.add(completed_second)
+    db_session.add_all([newer_job, older_job])
     await db_session.flush()
-    completed_first.created_at = older_created
-    completed_second.created_at = now - timedelta(hours=1)
-    await db_session.commit()
 
-    today = date.today().isoformat()
     response = await auth_client.get(
         "/api/v1/scheduling/jobs/completed",
-        params={"date_from": today, "date_to": today},
+        params={"date_from": org_today.isoformat(), "date_to": org_today.isoformat()},
     )
     assert response.status_code == 200
     job_numbers = [item["job_number"] for item in response.json()["items"]]
-    assert job_numbers.index(completed_first.job_number) < job_numbers.index(
-        completed_second.job_number
-    )
+    assert job_newer in job_numbers, job_numbers
+    assert job_older in job_numbers, job_numbers
+    assert job_numbers.index(job_newer) < job_numbers.index(job_older)
