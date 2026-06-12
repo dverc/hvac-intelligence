@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 
@@ -108,3 +108,57 @@ async def test_get_scheduled_jobs(auth_client, seeded_customer):
     assert response.status_code == 200
     body = response.json()
     assert "items" in body
+
+
+@pytest.mark.asyncio
+async def test_completed_dispatch_jobs_sorted_by_completion_date(
+    auth_client, db_session, seeded_customer
+):
+    from app.models.dispatch_job import DispatchJob
+
+    now = datetime.now(timezone.utc)
+    older_created = now - timedelta(days=21)
+    customer = seeded_customer["customer"]
+    tech_id = uuid.UUID(seeded_customer["technician_id"])
+
+    completed_first = DispatchJob(
+        org_id=SEED_ORG_ID,
+        job_number=f"DX-COMP-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer.customer_id,
+        technician_id=tech_id,
+        issue_type="AC_FAILURE",
+        job_status="COMPLETED",
+        scheduled_window_start=older_created,
+        scheduled_window_end=older_created + timedelta(hours=2),
+        actual_completion=now,
+        created_by="TEST",
+    )
+    completed_second = DispatchJob(
+        org_id=SEED_ORG_ID,
+        job_number=f"DX-COMP-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer.customer_id,
+        technician_id=tech_id,
+        issue_type="MAINTENANCE",
+        job_status="COMPLETED",
+        scheduled_window_start=now - timedelta(hours=4),
+        scheduled_window_end=now - timedelta(hours=2),
+        actual_completion=now - timedelta(hours=3),
+        created_by="TEST",
+    )
+    db_session.add(completed_first)
+    db_session.add(completed_second)
+    await db_session.flush()
+    completed_first.created_at = older_created
+    completed_second.created_at = now - timedelta(hours=1)
+    await db_session.commit()
+
+    today = date.today().isoformat()
+    response = await auth_client.get(
+        "/api/v1/scheduling/jobs/completed",
+        params={"date_from": today, "date_to": today},
+    )
+    assert response.status_code == 200
+    job_numbers = [item["job_number"] for item in response.json()["items"]]
+    assert job_numbers.index(completed_first.job_number) < job_numbers.index(
+        completed_second.job_number
+    )
