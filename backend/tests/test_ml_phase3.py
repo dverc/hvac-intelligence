@@ -8,6 +8,7 @@ import pytest
 from app.ml.churn_model import default_rule_score, get_unified_score
 from app.ml.drift_monitor import compute_psi, get_drift_status
 from app.ml.feature_engineering import ML_FEATURE_ORDER
+from app.core.constants import SEED_ORG_ID_STR
 from app.ml.retraining import check_and_trigger_retraining
 
 
@@ -86,7 +87,7 @@ def test_retraining_not_triggered_insufficient_ground_truth():
             "needs_retraining": True,
         },
     ):
-        result = check_and_trigger_retraining(mock_db)
+        result = check_and_trigger_retraining(mock_db, SEED_ORG_ID_STR)
 
     assert result["triggered"] is False
     assert result["reason"] == "insufficient_ground_truth"

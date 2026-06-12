@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,9 +18,15 @@ logger = logging.getLogger(__name__)
 _GROUND_TRUTH_MINIMUM = 20
 
 
-def _load_training_data_from_labels(db: Session) -> list[tuple[dict[str, Any], int]]:
+def _load_training_data_from_labels(
+    db: Session,
+    org_id: str,
+) -> list[tuple[dict[str, Any], int]]:
+    org_uuid = uuid.UUID(str(org_id))
     rows = db.scalars(
-        select(GroundTruthLabel).order_by(GroundTruthLabel.recorded_at.asc())
+        select(GroundTruthLabel)
+        .where(GroundTruthLabel.org_id == org_uuid)
+        .order_by(GroundTruthLabel.recorded_at.asc())
     ).all()
     training: list[tuple[dict[str, Any], int]] = []
     for row in rows:
@@ -30,12 +37,12 @@ def _load_training_data_from_labels(db: Session) -> list[tuple[dict[str, Any], i
     return training
 
 
-def train_model_from_ground_truth(db: Session) -> dict[str, Any]:
-    """Train and persist a new churn model from labeled outcomes."""
+def train_model_from_ground_truth(db: Session, org_id: str) -> dict[str, Any]:
+    """Train and persist a new churn model from labeled outcomes for one org."""
     from app.ml.churn_model import train_model
     from app.ml.model_registry import reset_churn_ensemble, save_model
 
-    training_data = _load_training_data_from_labels(db)
+    training_data = _load_training_data_from_labels(db, org_id)
     if len(training_data) < _GROUND_TRUTH_MINIMUM:
         return {
             "status": "skipped",
@@ -48,8 +55,9 @@ def train_model_from_ground_truth(db: Session) -> dict[str, Any]:
     save_model(model, version, metrics)
     reset_churn_ensemble()
     logger.info(
-        "Trained churn model version=%s from %s ground-truth labels (AUC=%.3f)",
+        "Trained churn model version=%s for org_id=%s from %s ground-truth labels (AUC=%.3f)",
         version,
+        org_id,
         len(training_data),
         float(metrics.get("auc_roc", 0.0)),
     )
@@ -61,9 +69,10 @@ def train_model_from_ground_truth(db: Session) -> dict[str, Any]:
     }
 
 
-def check_and_trigger_retraining(db: Session) -> dict[str, Any]:
-    """Evaluate drift; train and batch-rescore when RETRAIN + enough labels."""
-    drift = check_model_drift(db)
+def check_and_trigger_retraining(db: Session, org_id: str) -> dict[str, Any]:
+    """Evaluate drift for one org; train and batch-rescore when RETRAIN + enough labels."""
+    org_uuid = uuid.UUID(str(org_id))
+    drift = check_model_drift(db, org_id=org_uuid)
     psi = float(drift.get("psi", 0.0))
     status = str(drift.get("status", "STABLE"))
 
@@ -102,7 +111,12 @@ def check_and_trigger_retraining(db: Session) -> dict[str, Any]:
         }
 
     ground_truth_count = int(
-        db.scalar(select(func.count()).select_from(GroundTruthLabel)) or 0
+        db.scalar(
+            select(func.count())
+            .select_from(GroundTruthLabel)
+            .where(GroundTruthLabel.org_id == org_uuid)
+        )
+        or 0
     )
 
     if ground_truth_count < _GROUND_TRUTH_MINIMUM:
@@ -123,7 +137,7 @@ def check_and_trigger_retraining(db: Session) -> dict[str, Any]:
         }
 
     try:
-        train_result = train_model_from_ground_truth(db)
+        train_result = train_model_from_ground_truth(db, org_id)
         if train_result.get("status") != "ok":
             logger.warning(
                 "Retraining aborted after drift=%s: %s",
@@ -155,6 +169,7 @@ def check_and_trigger_retraining(db: Session) -> dict[str, Any]:
             "reason": "drift",
             "psi": psi,
             "status": status,
+            "org_id": org_id,
             "ground_truth_count": ground_truth_count,
         }
     except Exception as exc:

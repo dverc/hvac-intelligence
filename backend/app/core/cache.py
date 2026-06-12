@@ -68,3 +68,55 @@ async def cache_delete(key: str) -> None:
         await get_redis_client().delete(key)
     except Exception:
         logger.debug("cache_delete failed for key=%s", key, exc_info=True)
+
+
+async def cache_rpush_json_items(
+    key: str,
+    items: list[dict[str, Any]],
+    ttl_seconds: int,
+) -> None:
+    """Atomically append JSON objects to a Redis list (safe for concurrent writers)."""
+    if not items:
+        return
+    try:
+        client = get_redis_client()
+        key_type = await client.type(key)
+        if key_type in {"string", b"string"}:
+            raw = await client.get(key)
+            await client.delete(key)
+            if raw:
+                try:
+                    legacy = json.loads(raw)
+                    if isinstance(legacy, dict):
+                        for chunk in legacy.get("chunks") or []:
+                            if isinstance(chunk, dict):
+                                await client.rpush(key, json.dumps(chunk))
+                except json.JSONDecodeError:
+                    pass
+        for item in items:
+            await client.rpush(key, json.dumps(item))
+        await client.expire(key, ttl_seconds)
+    except Exception:
+        logger.debug("cache_rpush_json_items failed for key=%s", key, exc_info=True)
+
+
+async def cache_lrange_json_items(key: str) -> list[dict[str, Any]]:
+    """Read all JSON objects from a Redis list; falls back to legacy SET payloads."""
+    try:
+        client = get_redis_client()
+        key_type = await client.type(key)
+        if key_type in {"list", b"list"}:
+            raw_items = await client.lrange(key, 0, -1)
+            parsed: list[dict[str, Any]] = []
+            for raw in raw_items:
+                try:
+                    item = json.loads(raw)
+                    if isinstance(item, dict):
+                        parsed.append(item)
+                except json.JSONDecodeError:
+                    continue
+            return parsed
+        return list((await cache_get(key) or {}).get("chunks") or [])
+    except Exception:
+        logger.debug("cache_lrange_json_items failed for key=%s", key, exc_info=True)
+        return []

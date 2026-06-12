@@ -9,7 +9,7 @@ import pytest
 from sklearn.calibration import CalibratedClassifierCV
 from sqlalchemy import select
 
-from app.core.constants import SEED_ORG_ID
+from app.core.constants import SEED_ORG_ID, SEED_ORG_ID_STR
 from app.models.ground_truth_label import GroundTruthLabel
 from app.pipeline.tasks import _maybe_record_call_outcome_ground_truth
 from app.ml.churn_model import (
@@ -230,12 +230,12 @@ def test_retraining_triggers_train_when_drift_and_sufficient_labels():
     ):
         from app.ml.retraining import check_and_trigger_retraining
 
-        result = check_and_trigger_retraining(mock_db)
+        result = check_and_trigger_retraining(mock_db, SEED_ORG_ID_STR)
 
     assert result["triggered"] is True
     assert result["reason"] == "drift"
     assert result["status"] == "RETRAIN"
-    mock_train.assert_called_once_with(mock_db)
+    mock_train.assert_called_once_with(mock_db, SEED_ORG_ID_STR)
     mock_rescore.delay.assert_called_once()
 
 
@@ -253,7 +253,7 @@ def test_retraining_skipped_when_drift_retrain_but_insufficient_labels():
     ):
         from app.ml.retraining import check_and_trigger_retraining
 
-        result = check_and_trigger_retraining(mock_db)
+        result = check_and_trigger_retraining(mock_db, SEED_ORG_ID_STR)
 
     assert result["triggered"] is False
     assert result["reason"] == "insufficient_ground_truth"

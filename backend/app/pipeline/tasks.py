@@ -468,9 +468,18 @@ def check_model_drift_and_retrain(self) -> dict[str, Any]:
 
     session = get_sync_session()
     try:
-        result = check_and_trigger_retraining(session)
+        orgs = session.scalars(
+            select(Organization).where(Organization.is_active.is_(True))
+        ).all()
+        org_results = [
+            {
+                "org_id": str(org.org_id),
+                **check_and_trigger_retraining(session, str(org.org_id)),
+            }
+            for org in orgs
+        ]
         session.commit()
-        return {"status": "ok", **result}
+        return {"status": "ok", "org_results": org_results}
     except Exception as exc:
         session.rollback()
         logger.exception("check_model_drift_and_retrain failed: %s", exc)

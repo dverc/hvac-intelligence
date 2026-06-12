@@ -14,16 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.logging_config import get_call_id
 from app.core.cache import (
     CUSTOMER_CACHE_TTL,
-    cache_delete,
-    cache_get,
-    cache_set,
-    customer_cache_key,
-)
-from app.core.cache import (
     RAG_CHUNKS_CACHE_TTL,
     cache_delete,
     cache_get,
+    cache_lrange_json_items,
+    cache_rpush_json_items,
     cache_set,
+    customer_cache_key,
     rag_chunks_cache_key,
 )
 from app.core.metrics import observe_tool_execution, rag_chunks_retrieved_total
@@ -94,26 +91,33 @@ def _build_rag_chunk_metadata(chunk: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _load_rag_chunks_from_cache(call_id: str) -> list[dict[str, Any]]:
-    cached = await cache_get(rag_chunks_cache_key(call_id))
-    if not cached:
-        return []
-    chunks = cached.get("chunks")
-    if isinstance(chunks, list):
-        return [dict(item) for item in chunks if isinstance(item, dict)]
-    return []
+    return await cache_lrange_json_items(rag_chunks_cache_key(call_id))
 
 
 async def _append_rag_chunks_to_cache(
     call_id: str,
     entries: list[dict[str, Any]],
 ) -> None:
-    if not entries:
-        return
-    key = rag_chunks_cache_key(call_id)
-    existing = await cache_get(key) or {"chunks": []}
-    merged = list(existing.get("chunks") or [])
-    merged.extend(entries)
-    await cache_set(key, {"chunks": merged}, RAG_CHUNKS_CACHE_TTL)
+    await cache_rpush_json_items(
+        rag_chunks_cache_key(call_id),
+        entries,
+        RAG_CHUNKS_CACHE_TTL,
+    )
+
+
+def _public_tool_error_message(exc: BaseException) -> str:
+    """Map internal exceptions to Vapi-safe user messages (no stack/SQL leakage)."""
+    from pydantic import ValidationError
+    from sqlalchemy.exc import SQLAlchemyError
+
+    if isinstance(exc, ValidationError):
+        return "Invalid input provided."
+    if isinstance(exc, SQLAlchemyError):
+        return "A database error occurred. Please try again."
+    if isinstance(exc, (ValueError, LookupError)):
+        if "not found" in str(exc).lower():
+            return "The requested resource was not found."
+    return "An internal error occurred. A team member has been notified."
 
 
 def _sanitize_rag_chunks(
@@ -567,7 +571,7 @@ class ToolExecutor:
                 "result": _tool_response_json(
                     success=False,
                     error_code="TOOL_EXECUTION_FAILED",
-                    message=str(exc),
+                    message=_public_tool_error_message(exc),
                 ),
             }
             await _complete_tool_call_audit("error")
@@ -1051,12 +1055,13 @@ class ToolExecutor:
         try:
             parsed = LookupServiceInfoArgs.model_validate(kwargs)
         except Exception as exc:
+            logger.error("lookup_service_info validation failed: %s", exc, exc_info=True)
             return _tool_response_json(
                 success=False,
                 error_code="INVALID_REQUEST",
                 message=(
                     "Provide at least one of query, category, or service_code. "
-                    f"Details: {exc}"
+                    "Invalid input provided."
                 ),
             )
 
@@ -1201,12 +1206,13 @@ class ToolExecutor:
         try:
             parsed = UpdateCustomerArgs.model_validate(kwargs)
         except Exception as exc:
+            logger.error("update_customer validation failed: %s", exc, exc_info=True)
             return _tool_response_json(
                 success=False,
                 error_code="INVALID_REQUEST",
                 message=(
                     "Invalid update request. Provide customer_id and at least one "
-                    f"field to update. Details: {exc}"
+                    "field to update. Invalid input provided."
                 ),
             )
 

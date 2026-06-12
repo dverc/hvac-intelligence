@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -140,17 +141,21 @@ def _training_scores(model_version: str) -> list[float]:
     return [float(value) for value in raw]
 
 
-def check_model_drift(db: Session, model_version: str = "v1") -> dict[str, Any]:
+def check_model_drift(
+    db: Session,
+    model_version: str = "v1",
+    *,
+    org_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
     """Compare recent churn score distribution against training scores (sync)."""
     since = datetime.now(timezone.utc) - timedelta(days=30)
-    rows = db.scalars(
-        select(ChurnScore.churn_probability)
-        .where(
-            ChurnScore.entity_type == "CUSTOMER",
-            ChurnScore.score_timestamp >= since,
-        )
-        .order_by(ChurnScore.score_timestamp.desc())
-    ).all()
+    churn_query = select(ChurnScore.churn_probability).where(
+        ChurnScore.entity_type == "CUSTOMER",
+        ChurnScore.score_timestamp >= since,
+    )
+    if org_id is not None:
+        churn_query = churn_query.where(ChurnScore.org_id == org_id)
+    rows = db.scalars(churn_query.order_by(ChurnScore.score_timestamp.desc())).all()
 
     actual_scores = [float(row) for row in rows]
     expected_scores = _training_scores(model_version)
