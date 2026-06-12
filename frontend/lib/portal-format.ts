@@ -1,5 +1,15 @@
 const PORTAL_TZ_FALLBACK = "America/Los_Angeles";
 
+function portalTimeZone(timezone?: string): string {
+  const tz = timezone ?? PORTAL_TZ_FALLBACK;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return PORTAL_TZ_FALLBACK;
+  }
+}
+
 export function formatPortalPhoneInput(value: string): string {
   const digits = value.replace(/\D/g, "").slice(0, 10);
   if (digits.length <= 3) return digits;
@@ -14,7 +24,7 @@ export function formatAppointmentWindow(
   endIso: string | null,
   timezone?: string,
 ): string {
-  const tz = timezone ?? PORTAL_TZ_FALLBACK;
+  const tz = portalTimeZone(timezone);
   if (!startIso) return "Time to be confirmed";
   const start = new Date(startIso);
   const end = endIso ? new Date(endIso) : null;
