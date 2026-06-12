@@ -1117,6 +1117,12 @@ export interface PortalAppointmentsResult {
   past_appointments: PortalAppointment[];
 }
 
+export function appendPortalOrgQuery(path: string, org?: string | null): string {
+  if (!org) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}org=${encodeURIComponent(org)}`;
+}
+
 async function portalFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     cache: "no-store",
@@ -1133,30 +1139,36 @@ async function portalFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function portalIdentify(phone: string) {
-  return portalFetch<PortalIdentifyResult>("/api/v1/portal/identify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone }),
-  });
-}
-
-export function portalGetAppointments(customerId: string) {
-  return portalFetch<PortalAppointmentsResult>(
-    `/api/v1/portal/appointments/${customerId}`,
+export function portalIdentify(phone: string, org?: string | null) {
+  return portalFetch<PortalIdentifyResult>(
+    appendPortalOrgQuery("/api/v1/portal/identify", org),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone }),
+    },
   );
 }
 
-export function portalRequestService(payload: {
-  phone: string;
-  name?: string;
-  issue_type: string;
-  description?: string;
-  preferred_date?: string;
-  preferred_time_window?: string;
-}) {
+export function portalGetAppointments(customerId: string, org?: string | null) {
+  return portalFetch<PortalAppointmentsResult>(
+    appendPortalOrgQuery(`/api/v1/portal/appointments/${customerId}`, org),
+  );
+}
+
+export function portalRequestService(
+  payload: {
+    phone: string;
+    name?: string;
+    issue_type: string;
+    description?: string;
+    preferred_date?: string;
+    preferred_time_window?: string;
+  },
+  org?: string | null,
+) {
   return portalFetch<{ success: boolean; ticket_number: string; message: string }>(
-    "/api/v1/portal/request",
+    appendPortalOrgQuery("/api/v1/portal/request", org),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1165,15 +1177,18 @@ export function portalRequestService(payload: {
   );
 }
 
-export function portalRescheduleRequest(payload: {
-  customer_id: string;
-  appointment_id: string;
-  preferred_date: string;
-  preferred_time_window: string;
-  reason?: string;
-}) {
+export function portalRescheduleRequest(
+  payload: {
+    customer_id: string;
+    appointment_id: string;
+    preferred_date: string;
+    preferred_time_window: string;
+    reason?: string;
+  },
+  org?: string | null,
+) {
   return portalFetch<{ success: boolean; message: string }>(
-    "/api/v1/portal/reschedule-request",
+    appendPortalOrgQuery("/api/v1/portal/reschedule-request", org),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

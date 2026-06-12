@@ -16,13 +16,13 @@ from app.schemas.portal import (
     PortalServiceRequest,
     PortalServiceRequestResponse,
 )
-from app.services.portal_service import PortalService
+from app.services.portal_service import PortalService, resolve_portal_org_id
 
 router = APIRouter(prefix="/portal", tags=["portal"])
 
 
-def _service(db: AsyncSession) -> PortalService:
-    return PortalService(db)
+def _service(db: AsyncSession, org_id: uuid.UUID) -> PortalService:
+    return PortalService(db, org_id)
 
 
 @router.post("/identify", response_model=PortalIdentifyResponse)
@@ -32,7 +32,8 @@ async def portal_identify(
     db: AsyncSession = Depends(get_db),
 ) -> PortalIdentifyResponse:
     payload = PortalIdentifyRequest.model_validate(await request.json())
-    return await _service(db).identify(payload.phone)
+    org_id = await resolve_portal_org_id(request.query_params.get("org"), db)
+    return await _service(db, org_id).identify(payload.phone)
 
 
 @router.get(
@@ -50,7 +51,8 @@ async def portal_appointments(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Customer not found") from exc
     try:
-        return await _service(db).get_appointments(parsed_id)
+        org_id = await resolve_portal_org_id(request.query_params.get("org"), db)
+        return await _service(db, org_id).get_appointments(parsed_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -62,7 +64,8 @@ async def portal_request_service(
     db: AsyncSession = Depends(get_db),
 ) -> PortalServiceRequestResponse:
     payload = PortalServiceRequest.model_validate(await request.json())
-    return await _service(db).request_service(payload)
+    org_id = await resolve_portal_org_id(request.query_params.get("org"), db)
+    return await _service(db, org_id).request_service(payload)
 
 
 @router.post("/reschedule-request", response_model=PortalRescheduleResponse)
@@ -73,6 +76,7 @@ async def portal_reschedule_request(
 ) -> PortalRescheduleResponse:
     payload = PortalRescheduleRequest.model_validate(await request.json())
     try:
-        return await _service(db).reschedule_request(payload)
+        org_id = await resolve_portal_org_id(request.query_params.get("org"), db)
+        return await _service(db, org_id).reschedule_request(payload)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

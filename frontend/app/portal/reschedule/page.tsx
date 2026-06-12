@@ -6,6 +6,7 @@ import { FormEvent, Suspense, useEffect, useState } from "react";
 
 import {
   ApiError,
+  appendPortalOrgQuery,
   portalGetAppointments,
   portalRescheduleRequest,
   type PortalAppointment,
@@ -22,6 +23,7 @@ function PortalReschedulePageContent() {
   const searchParams = useSearchParams();
   const customerId = searchParams.get("customer_id") ?? "";
   const appointmentId = searchParams.get("appointment_id") ?? "";
+  const org = searchParams.get("org");
 
   const [appointment, setAppointment] = useState<PortalAppointment | null>(null);
   const [preferredDate, setPreferredDate] = useState("");
@@ -40,7 +42,7 @@ function PortalReschedulePageContent() {
         return;
       }
       try {
-        const data = await portalGetAppointments(customerId);
+        const data = await portalGetAppointments(customerId, org);
         const match =
           data.upcoming_appointments.find((a) => a.id === appointmentId) ??
           data.past_appointments.find((a) => a.id === appointmentId);
@@ -56,7 +58,7 @@ function PortalReschedulePageContent() {
       }
     }
     void loadAppointment();
-  }, [customerId, appointmentId]);
+  }, [customerId, appointmentId, org]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -67,13 +69,16 @@ function PortalReschedulePageContent() {
     setLoading(true);
     setError(null);
     try {
-      await portalRescheduleRequest({
-        customer_id: customerId,
-        appointment_id: appointmentId,
-        preferred_date: preferredDate,
-        preferred_time_window: preferredWindow,
-        reason: reason || undefined,
-      });
+      await portalRescheduleRequest(
+        {
+          customer_id: customerId,
+          appointment_id: appointmentId,
+          preferred_date: preferredDate,
+          preferred_time_window: preferredWindow,
+          reason: reason || undefined,
+        },
+        org,
+      );
       setSuccess(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to submit request.");
@@ -98,7 +103,10 @@ function PortalReschedulePageContent() {
           Reschedule request submitted. We&apos;ll contact you to confirm the new time.
         </p>
         <Link
-          href={`/portal/appointments?customer_id=${customerId}`}
+          href={appendPortalOrgQuery(
+            `/portal/appointments?customer_id=${customerId}`,
+            org,
+          )}
           className="mt-6 inline-block text-sm text-indigo-600 hover:underline"
         >
           ← Back to appointments
@@ -111,7 +119,10 @@ function PortalReschedulePageContent() {
     <div className="mx-auto max-w-lg space-y-6">
       <div>
         <Link
-          href={`/portal/appointments?customer_id=${customerId}`}
+          href={appendPortalOrgQuery(
+            `/portal/appointments?customer_id=${customerId}`,
+            org,
+          )}
           className="text-sm text-indigo-600 hover:underline"
         >
           ← Back

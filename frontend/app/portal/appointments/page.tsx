@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import {
   ApiError,
+  appendPortalOrgQuery,
   portalGetAppointments,
   portalIdentify,
   type PortalAppointment,
@@ -15,11 +16,13 @@ import { formatAppointmentWindow, statusBadgeClass } from "@/lib/portal-format";
 function AppointmentCard({
   appointment,
   customerId,
+  org,
   timezone,
   muted = false,
 }: {
   appointment: PortalAppointment;
   customerId: string;
+  org: string | null;
   timezone?: string;
   muted?: boolean;
 }) {
@@ -60,7 +63,10 @@ function AppointmentCard({
       </div>
       {!muted && (
         <Link
-          href={`/portal/reschedule?customer_id=${customerId}&appointment_id=${appointment.id}`}
+          href={appendPortalOrgQuery(
+            `/portal/reschedule?customer_id=${customerId}&appointment_id=${appointment.id}`,
+            org,
+          )}
           className="mt-4 inline-block text-sm font-medium text-indigo-600 hover:underline"
         >
           Request Reschedule
@@ -74,6 +80,7 @@ export default function PortalAppointmentsPage() {
   const searchParams = useSearchParams();
   const phone = searchParams.get("phone") ?? "";
   const customerIdParam = searchParams.get("customer_id");
+  const org = searchParams.get("org");
 
   const [name, setName] = useState<string>("");
   const [customerId, setCustomerId] = useState<string>("");
@@ -90,7 +97,7 @@ export default function PortalAppointmentsPage() {
       setError(null);
       try {
         if (customerIdParam) {
-          const data = await portalGetAppointments(customerIdParam);
+          const data = await portalGetAppointments(customerIdParam, org);
           setCustomerId(data.customer_id);
           setName(data.name);
           setTimezone(
@@ -101,7 +108,7 @@ export default function PortalAppointmentsPage() {
           setUpcoming(data.upcoming_appointments);
           setPast(data.past_appointments);
         } else if (phone) {
-          const data = await portalIdentify(phone);
+          const data = await portalIdentify(phone, org);
           if (!data.found || !data.customer_id) {
             setError("No account found for this phone number.");
             return;
@@ -125,7 +132,7 @@ export default function PortalAppointmentsPage() {
       }
     }
     void load();
-  }, [phone, customerIdParam]);
+  }, [phone, customerIdParam, org]);
 
   if (loading) {
     return (
@@ -139,7 +146,7 @@ export default function PortalAppointmentsPage() {
     return (
       <div className="space-y-4 text-center">
         <p className="text-red-600">{error}</p>
-        <Link href="/portal" className="text-indigo-600 hover:underline">
+        <Link href={appendPortalOrgQuery("/portal", org)} className="text-indigo-600 hover:underline">
           ← Back to lookup
         </Link>
       </div>
@@ -149,7 +156,7 @@ export default function PortalAppointmentsPage() {
   return (
     <div className="space-y-8">
       <div>
-        <Link href="/portal" className="text-sm text-indigo-600 hover:underline">
+        <Link href={appendPortalOrgQuery("/portal", org)} className="text-sm text-indigo-600 hover:underline">
           ← Back
         </Link>
         <h1 className="mt-2 text-2xl font-bold text-gray-900">
@@ -171,6 +178,7 @@ export default function PortalAppointmentsPage() {
                 key={appt.id}
                 appointment={appt}
                 customerId={customerId}
+                org={org}
                 timezone={timezone}
               />
             ))}
@@ -197,6 +205,7 @@ export default function PortalAppointmentsPage() {
                   key={appt.id}
                   appointment={appt}
                   customerId={customerId}
+                  org={org}
                   timezone={timezone}
                   muted
                 />
@@ -207,7 +216,10 @@ export default function PortalAppointmentsPage() {
       </section>
 
       <Link
-        href={`/portal/request?phone=${encodeURIComponent(phone)}`}
+        href={appendPortalOrgQuery(
+          `/portal/request?phone=${encodeURIComponent(phone)}`,
+          org,
+        )}
         className="inline-block rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700"
       >
         Request New Service

@@ -11,8 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import SEED_ORG_ID
+from app.core.tenant import get_fallback_dashboard_org_id
 from app.models.dispatch_job import DispatchJob
 from app.models.org_settings import OrgSettings
+from app.services.portal_service import resolve_portal_org_id
 
 
 async def _seed_portal_jobs(db_session: AsyncSession, seeded_customer: dict) -> DispatchJob:
@@ -149,6 +151,48 @@ async def test_portal_appointments_returns_org_timezone_from_settings(
     response = await api_client.get(f"/api/v1/portal/appointments/{customer_id}")
     assert response.status_code == 200
     assert response.json()["timezone"] == "America/Chicago"
+
+
+@pytest.mark.asyncio
+async def test_resolve_portal_org_id_by_slug(db_session: AsyncSession):
+    org_id = await resolve_portal_org_id("hvac-demo", db_session)
+    assert org_id == SEED_ORG_ID
+
+
+@pytest.mark.asyncio
+async def test_resolve_portal_org_id_case_insensitive(db_session: AsyncSession):
+    org_id = await resolve_portal_org_id("HVAC-DEMO", db_session)
+    assert org_id == SEED_ORG_ID
+
+    org_id_by_name = await resolve_portal_org_id("hvac intelligence demo", db_session)
+    assert org_id_by_name == SEED_ORG_ID
+
+
+@pytest.mark.asyncio
+async def test_resolve_portal_org_id_falls_back_when_missing_or_unknown(
+    db_session: AsyncSession,
+):
+    fallback = get_fallback_dashboard_org_id()
+    assert await resolve_portal_org_id(None, db_session) == fallback
+    assert await resolve_portal_org_id("", db_session) == fallback
+    assert await resolve_portal_org_id("unknown-org-slug", db_session) == fallback
+
+
+@pytest.mark.asyncio
+async def test_portal_identify_with_org_query_param(
+    api_client: AsyncClient, db_session: AsyncSession, seeded_customer
+):
+    await _seed_portal_jobs(db_session, seeded_customer)
+    phone = seeded_customer["phone"]
+
+    response = await api_client.post(
+        "/api/v1/portal/identify?org=hvac-demo",
+        json={"phone": phone},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["found"] is True
+    assert body["customer_id"] == seeded_customer["customer_id"]
 
 
 @pytest.mark.asyncio

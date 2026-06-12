@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
 
-import { ApiError, portalIdentify } from "@/lib/api";
+import { ApiError, appendPortalOrgQuery, portalIdentify } from "@/lib/api";
 import { getOrgName } from "@/lib/config";
 import { formatPortalPhoneInput } from "@/lib/portal-format";
 
 export default function PortalLandingPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const org = searchParams.get("org");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,9 +29,14 @@ export default function PortalLandingPage() {
 
     setLoading(true);
     try {
-      const result = await portalIdentify(phone);
+      const result = await portalIdentify(phone, org);
       if (result.found) {
-        router.push(`/portal/appointments?phone=${encodeURIComponent(phone)}`);
+        router.push(
+          appendPortalOrgQuery(
+            `/portal/appointments?phone=${encodeURIComponent(phone)}`,
+            org,
+          ),
+        );
       } else {
         setNotFound(true);
       }
@@ -74,7 +81,10 @@ export default function PortalLandingPage() {
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               <p>No account found. Would you like to request service?</p>
               <Link
-                href={`/portal/request?phone=${encodeURIComponent(phone)}`}
+                href={appendPortalOrgQuery(
+                  `/portal/request?phone=${encodeURIComponent(phone)}`,
+                  org,
+                )}
                 className="mt-2 inline-block font-medium text-indigo-700 hover:underline"
               >
                 Request Service
@@ -93,7 +103,10 @@ export default function PortalLandingPage() {
       </div>
 
       <p className="mt-6 text-center text-sm text-gray-500">
-        <Link href="/portal/request" className="font-medium text-indigo-600 hover:underline">
+        <Link
+          href={appendPortalOrgQuery("/portal/request", org)}
+          className="font-medium text-indigo-600 hover:underline"
+        >
           Request Service
         </Link>
       </p>

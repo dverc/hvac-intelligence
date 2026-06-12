@@ -4,13 +4,14 @@ import uuid
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.tenant import get_fallback_dashboard_org_id
 from app.models.customer import Customer
+from app.models.organization import Organization
 from app.models.dispatch_job import DispatchJob
 from app.models.org_settings import OrgSettings
 from app.models.support_ticket import SupportTicket
@@ -64,14 +65,34 @@ def _ticket_number(ticket_id: uuid.UUID) -> str:
     return f"TKT-{str(ticket_id).replace('-', '')[:8].upper()}"
 
 
+async def resolve_portal_org_id(
+    org_slug: str | None, db: AsyncSession
+) -> uuid.UUID:
+    """Resolve tenant org from portal slug/name; fall back to DASHBOARD_ORG_ID."""
+    if org_slug and org_slug.strip():
+        normalized = org_slug.strip()
+        org_id = (
+            await db.execute(
+                select(Organization.org_id).where(
+                    Organization.is_active.is_(True),
+                    or_(
+                        func.lower(Organization.slug) == normalized.lower(),
+                        func.lower(Organization.org_name) == normalized.lower(),
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if org_id is not None:
+            return org_id
+    return get_fallback_dashboard_org_id()
+
+
 class PortalService:
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, org_id: uuid.UUID) -> None:
         self.db = db
+        self.org_id = org_id
         self.customers = CustomerService(db)
         self.tickets = TicketService(db)
-
-    def _org_id(self) -> uuid.UUID:
-        return get_fallback_dashboard_org_id()
 
     async def _get_org_timezone_name(self, org_id: uuid.UUID) -> str:
         tz_name = (
@@ -87,14 +108,13 @@ class PortalService:
     async def _load_appointments(
         self, customer_id: uuid.UUID
     ) -> tuple[list[PortalAppointmentOut], list[PortalAppointmentOut]]:
-        org_id = self._org_id()
-        portal_tz = await self._get_org_timezone(org_id)
+        portal_tz = await self._get_org_timezone(self.org_id)
         now = datetime.now(timezone.utc)
         stmt = (
             select(DispatchJob)
             .where(
                 DispatchJob.customer_id == customer_id,
-                DispatchJob.org_id == self._org_id(),
+                DispatchJob.org_id == self.org_id,
                 DispatchJob.scheduled_window_start.is_not(None),
             )
             .options(selectinload(DispatchJob.technician))
@@ -117,8 +137,7 @@ class PortalService:
         )
 
     async def identify(self, phone: str) -> PortalIdentifyResponse:
-        org_id = self._org_id()
-        customer = await self.customers.lookup_by_phone(phone, org_id)
+        customer = await self.customers.lookup_by_phone(phone, self.org_id)
         if customer is None:
             return PortalIdentifyResponse(found=False)
 
@@ -127,14 +146,13 @@ class PortalService:
             found=True,
             customer_id=str(customer.customer_id),
             name=customer.full_name,
-            timezone=await self._get_org_timezone_name(org_id),
+            timezone=await self._get_org_timezone_name(self.org_id),
             upcoming_appointments=upcoming,
             past_appointments=past,
         )
 
     async def get_appointments(self, customer_id: uuid.UUID) -> PortalAppointmentsResponse:
-        org_id = self._org_id()
-        customer = await self.customers.get_by_id(customer_id, org_id)
+        customer = await self.customers.get_by_id(customer_id, self.org_id)
         if customer is None:
             raise ValueError("Customer not found")
 
@@ -142,7 +160,7 @@ class PortalService:
         return PortalAppointmentsResponse(
             customer_id=str(customer.customer_id),
             name=customer.full_name,
-            timezone=await self._get_org_timezone_name(org_id),
+            timezone=await self._get_org_timezone_name(self.org_id),
             upcoming_appointments=upcoming,
             past_appointments=past,
         )
@@ -150,14 +168,13 @@ class PortalService:
     async def _get_or_create_customer(
         self, phone: str, name: str | None
     ) -> Customer:
-        org_id = self._org_id()
-        existing = await self.customers.lookup_by_phone(phone, org_id)
+        existing = await self.customers.lookup_by_phone(phone, self.org_id)
         if existing is not None:
             return existing
 
         normalized = normalize_phone(phone)
         customer = Customer(
-            org_id=org_id,
+            org_id=self.org_id,
             full_name=(name or "Portal Customer").strip() or "Portal Customer",
             phone_primary=normalized,
             customer_since=date.today(),
@@ -196,7 +213,6 @@ class PortalService:
         self, body: PortalServiceRequest
     ) -> PortalServiceRequestResponse:
         customer = await self._get_or_create_customer(body.phone, body.name)
-        org_id = self._org_id()
         subject = f"Portal service request: {body.issue_type}"
         description = self._build_callback_description(
             issue_type=body.issue_type,
@@ -206,7 +222,7 @@ class PortalService:
         )
         ticket_data = await self.tickets.create_ticket(
             customer_id=customer.customer_id,
-            org_id=org_id,
+            org_id=self.org_id,
             ticket_type="MANAGER_CALLBACK",
             subject=subject,
             description=description,
@@ -227,14 +243,13 @@ class PortalService:
     async def reschedule_request(
         self, body: PortalRescheduleRequest
     ) -> PortalRescheduleResponse:
-        org_id = self._org_id()
         try:
             customer_id = uuid.UUID(body.customer_id)
             appointment_id = uuid.UUID(body.appointment_id)
         except ValueError as exc:
             raise ValueError("Invalid customer or appointment id") from exc
 
-        customer = await self.customers.get_by_id(customer_id, org_id)
+        customer = await self.customers.get_by_id(customer_id, self.org_id)
         if customer is None:
             raise ValueError("Customer not found")
 
@@ -242,11 +257,11 @@ class PortalService:
         if (
             job is None
             or job.customer_id != customer_id
-            or job.org_id != org_id
+            or job.org_id != self.org_id
         ):
             raise ValueError("Appointment not found")
 
-        portal_tz = await self._get_org_timezone(org_id)
+        portal_tz = await self._get_org_timezone(self.org_id)
         subject = f"Portal reschedule request for {job.job_number}"
         extra = (
             f"Appointment: {job.job_number}\n"
@@ -265,7 +280,7 @@ class PortalService:
         )
         await self.tickets.create_ticket(
             customer_id=customer_id,
-            org_id=org_id,
+            org_id=self.org_id,
             ticket_type="MANAGER_CALLBACK",
             subject=subject,
             description=description,

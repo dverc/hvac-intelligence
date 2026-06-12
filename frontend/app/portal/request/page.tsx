@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
 
-import { ApiError, portalRequestService } from "@/lib/api";
+import { ApiError, appendPortalOrgQuery, portalRequestService } from "@/lib/api";
 import { formatPortalPhoneInput } from "@/lib/portal-format";
 
 const ISSUE_TYPES = [
@@ -24,6 +24,7 @@ const TIME_WINDOWS = [
 
 function PortalRequestPageContent() {
   const searchParams = useSearchParams();
+  const org = searchParams.get("org");
   const [phone, setPhone] = useState(searchParams.get("phone") ?? "");
   const [name, setName] = useState("");
   const [issueType, setIssueType] = useState<string>(ISSUE_TYPES[0]);
@@ -45,14 +46,17 @@ function PortalRequestPageContent() {
 
     setLoading(true);
     try {
-      const result = await portalRequestService({
-        phone,
-        name: name || undefined,
-        issue_type: issueType,
-        description: description || undefined,
-        preferred_date: preferredDate || undefined,
-        preferred_time_window: preferredWindow,
-      });
+      const result = await portalRequestService(
+        {
+          phone,
+          name: name || undefined,
+          issue_type: issueType,
+          description: description || undefined,
+          preferred_date: preferredDate || undefined,
+          preferred_time_window: preferredWindow,
+        },
+        org,
+      );
       setTicketNumber(result.ticket_number);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to submit request.");
@@ -71,7 +75,10 @@ function PortalRequestPageContent() {
         <p className="mt-4 text-sm text-green-800">
           We&apos;ll contact you within 2 hours during business hours.
         </p>
-        <Link href="/portal" className="mt-6 inline-block text-sm text-indigo-600 hover:underline">
+        <Link
+          href={appendPortalOrgQuery("/portal", org)}
+          className="mt-6 inline-block text-sm text-indigo-600 hover:underline"
+        >
           ← Back to portal
         </Link>
       </div>
@@ -81,7 +88,7 @@ function PortalRequestPageContent() {
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <div>
-        <Link href="/portal" className="text-sm text-indigo-600 hover:underline">
+        <Link href={appendPortalOrgQuery("/portal", org)} className="text-sm text-indigo-600 hover:underline">
           ← Back
         </Link>
         <h1 className="mt-2 text-2xl font-bold text-gray-900">Request Service</h1>
