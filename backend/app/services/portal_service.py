@@ -73,13 +73,16 @@ class PortalService:
     def _org_id(self) -> uuid.UUID:
         return get_fallback_dashboard_org_id()
 
-    async def _get_org_timezone(self, org_id: uuid.UUID) -> ZoneInfo:
+    async def _get_org_timezone_name(self, org_id: uuid.UUID) -> str:
         tz_name = (
             await self.db.execute(
                 select(OrgSettings.timezone).where(OrgSettings.org_id == org_id)
             )
         ).scalar_one_or_none()
-        return ZoneInfo(tz_name or DEFAULT_PORTAL_TZ)
+        return tz_name or DEFAULT_PORTAL_TZ
+
+    async def _get_org_timezone(self, org_id: uuid.UUID) -> ZoneInfo:
+        return ZoneInfo(await self._get_org_timezone_name(org_id))
 
     async def _load_appointments(
         self, customer_id: uuid.UUID
@@ -124,6 +127,7 @@ class PortalService:
             found=True,
             customer_id=str(customer.customer_id),
             name=customer.full_name,
+            timezone=await self._get_org_timezone_name(org_id),
             upcoming_appointments=upcoming,
             past_appointments=past,
         )
@@ -138,6 +142,7 @@ class PortalService:
         return PortalAppointmentsResponse(
             customer_id=str(customer.customer_id),
             name=customer.full_name,
+            timezone=await self._get_org_timezone_name(org_id),
             upcoming_appointments=upcoming,
             past_appointments=past,
         )

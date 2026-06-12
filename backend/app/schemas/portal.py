@@ -25,6 +25,7 @@ class PortalIdentifyResponse(BaseModel):
     found: bool
     customer_id: str | None = None
     name: str | None = None
+    timezone: str = "America/Los_Angeles"
     upcoming_appointments: list[PortalAppointmentOut] = Field(default_factory=list)
     past_appointments: list[PortalAppointmentOut] = Field(default_factory=list)
 
@@ -32,6 +33,7 @@ class PortalIdentifyResponse(BaseModel):
 class PortalAppointmentsResponse(BaseModel):
     customer_id: str
     name: str
+    timezone: str = "America/Los_Angeles"
     upcoming_appointments: list[PortalAppointmentOut]
     past_appointments: list[PortalAppointmentOut]
 

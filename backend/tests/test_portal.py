@@ -7,10 +7,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import SEED_ORG_ID
 from app.models.dispatch_job import DispatchJob
+from app.models.org_settings import OrgSettings
 
 
 async def _seed_portal_jobs(db_session: AsyncSession, seeded_customer: dict) -> DispatchJob:
@@ -122,7 +124,31 @@ async def test_portal_appointments_endpoint(
     body = response.json()
     assert body["customer_id"] == customer_id
     assert body["name"] == "Sarah Mitchell"
+    assert body["timezone"] == "America/Los_Angeles"
     assert any(a["job_number"] == upcoming.job_number for a in body["upcoming_appointments"])
+
+
+@pytest.mark.asyncio
+async def test_portal_appointments_returns_org_timezone_from_settings(
+    api_client: AsyncClient, db_session: AsyncSession, seeded_customer
+):
+    await _seed_portal_jobs(db_session, seeded_customer)
+    customer_id = seeded_customer["customer_id"]
+
+    settings = (
+        await db_session.execute(
+            select(OrgSettings).where(OrgSettings.org_id == SEED_ORG_ID)
+        )
+    ).scalar_one_or_none()
+    if settings is None:
+        settings = OrgSettings(org_id=SEED_ORG_ID, agent_name="AI Assistant")
+        db_session.add(settings)
+    settings.timezone = "America/Chicago"
+    await db_session.flush()
+
+    response = await api_client.get(f"/api/v1/portal/appointments/{customer_id}")
+    assert response.status_code == 200
+    assert response.json()["timezone"] == "America/Chicago"
 
 
 @pytest.mark.asyncio
