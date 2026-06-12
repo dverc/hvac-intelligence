@@ -8,9 +8,13 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.ml.churn_model import default_rule_score, predict_probability
-from app.ml.feature_engineering import build_customer_features
+from app.ml.feature_engineering import (
+    build_customer_features,
+    build_customer_features_sync,
+)
 from app.ml.model_registry import load_model
 from app.models.customer import Customer
 from app.models.ground_truth_label import GroundTruthLabel
@@ -47,4 +51,38 @@ async def record_churn_event(
     )
     db.add(label)
     await db.flush()
+    return label
+
+
+def record_churn_event_sync(
+    customer_id: uuid.UUID | str,
+    churned: bool,
+    session: Session,
+    *,
+    notes: str | None = None,
+) -> GroundTruthLabel:
+    """Persist a labeled churn outcome from sync Celery workers."""
+    cid = uuid.UUID(str(customer_id))
+    customer = session.get(Customer, cid)
+    if customer is None:
+        raise ValueError(f"Customer {customer_id} not found")
+
+    features = build_customer_features_sync(cid, session)
+    model = load_model()
+    if model is not None:
+        probability = predict_probability(features, model)
+    else:
+        probability = default_rule_score(features)
+
+    label = GroundTruthLabel(
+        customer_id=cid,
+        org_id=customer.org_id,
+        churned=churned,
+        recorded_at=datetime.now(timezone.utc),
+        feature_snapshot=features,
+        churn_probability_at_time=Decimal(str(round(probability, 3))),
+        notes=notes,
+    )
+    session.add(label)
+    session.flush()
     return label

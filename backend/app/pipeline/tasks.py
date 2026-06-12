@@ -19,6 +19,7 @@ from app.models.churn_score import ChurnScore
 from app.models.customer import Customer
 from app.models.dispatch_job import DispatchJob
 from app.models.feature_store import FeatureStore
+from app.models.ground_truth_label import GroundTruthLabel
 from app.models.google_calendar_token import GoogleCalendarToken
 from app.models.jobber_token import JobberToken
 from app.models.organization import Organization
@@ -76,6 +77,97 @@ _SMS_TASK_RETRY = dict(
     retry_backoff_max=600,
     retry_jitter=True,
 )
+
+_INTERVENTION_SUCCESS_OUTCOMES = frozenset({"DISPATCHED", "FAQ_RESOLVED"})
+_HIGH_RISK_TIERS = frozenset({"HIGH", "CRITICAL"})
+_GROUND_TRUTH_SCORE_DROP_MINIMUM = 0.10
+
+
+def _maybe_record_call_outcome_ground_truth(
+    session,
+    feature_payload: dict[str, Any],
+    scoring: dict[str, Any],
+    score_before: Any,
+    score_after: Any,
+) -> dict[str, Any] | None:
+    """
+    Create high-confidence ground-truth labels from completed call outcomes.
+    Skips ambiguous cases and duplicate labels for the same call_id.
+    """
+    call_features = feature_payload.get("call_features") or {}
+    call_outcome = str(call_features.get("call_outcome") or "").upper()
+    call_id = feature_payload.get("call_id")
+    customer_id = feature_payload.get("customer_id")
+
+    if not customer_id or not call_outcome:
+        return None
+
+    customer_uuid = uuid.UUID(str(customer_id))
+    if call_id:
+        existing = session.execute(
+            select(GroundTruthLabel.label_id).where(
+                GroundTruthLabel.customer_id == customer_uuid,
+                GroundTruthLabel.notes.isnot(None),
+                GroundTruthLabel.notes.contains(f"call_id={call_id}"),
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return None
+
+    churned: bool | None = None
+    notes: str | None = None
+
+    if call_outcome in _INTERVENTION_SUCCESS_OUTCOMES:
+        if score_before is None or score_after is None:
+            return None
+        score_drop = float(score_before) - float(score_after)
+        if score_drop < _GROUND_TRUTH_SCORE_DROP_MINIMUM:
+            return None
+        churned = False
+        notes = (
+            f"auto:intervention_success;call_outcome={call_outcome};"
+            f"call_id={call_id};score_drop={score_drop:.3f}"
+        )
+    elif call_outcome == "ESCALATED_HUMAN":
+        risk_tier = str(scoring.get("risk_tier") or "").upper()
+        if risk_tier not in _HIGH_RISK_TIERS:
+            return None
+        churned = True
+        notes = (
+            f"auto:escalation_unresolved;call_outcome={call_outcome};"
+            f"call_id={call_id};risk_tier={risk_tier}"
+        )
+    else:
+        return None
+
+    from app.ml.ground_truth import record_churn_event_sync
+
+    try:
+        label = record_churn_event_sync(
+            customer_uuid,
+            churned,
+            session,
+            notes=notes,
+        )
+        logger.info(
+            "Ground-truth label created from call outcome | customer_id=%s "
+            "call_id=%s churned=%s",
+            customer_id,
+            call_id,
+            churned,
+        )
+        return {
+            "label_id": str(label.label_id),
+            "churned": churned,
+            "call_outcome": call_outcome,
+        }
+    except Exception:
+        logger.exception(
+            "Failed to record ground-truth label | customer_id=%s call_id=%s",
+            customer_id,
+            call_id,
+        )
+        return None
 
 
 @celery_app.task(name="app.pipeline.tasks.process_call_features", **_STANDARD_TASK_RETRY)
@@ -146,12 +238,25 @@ def process_call_features(self, feature_payload: dict[str, Any]) -> dict[str, An
             saved_by_ai_counter.inc()
             _emit_intervention_complete(session, feature_payload, score_before, score_after)
 
-        return {
+        ground_truth = _maybe_record_call_outcome_ground_truth(
+            session,
+            feature_payload,
+            scoring,
+            score_before,
+            score_after,
+        )
+        if ground_truth is not None:
+            session.commit()
+
+        result: dict[str, Any] = {
             "status": "ok",
             "customer_id": str(customer_id),
             "churn_probability": scoring.get("churn_probability"),
             "risk_tier": scoring.get("risk_tier"),
         }
+        if ground_truth is not None:
+            result["ground_truth_label"] = ground_truth
+        return result
     except Exception as exc:
         session.rollback()
         logger.exception("process_call_features failed: %s", exc)
@@ -354,7 +459,7 @@ def _emit_intervention_complete(
 
 @celery_app.task(name="app.pipeline.tasks.check_model_drift_and_retrain", **_STANDARD_TASK_RETRY)
 def check_model_drift_and_retrain(self) -> dict[str, Any]:
-    """Daily drift check; may trigger batch rescoring when PSI exceeds threshold."""
+    """Daily drift check; may train and batch-rescore when PSI exceeds threshold."""
     logger.info(
         "Task starting: check_model_drift_and_retrain attempt=%s",
         self.request.retries + 1,
@@ -369,7 +474,7 @@ def check_model_drift_and_retrain(self) -> dict[str, Any]:
     except Exception as exc:
         session.rollback()
         logger.exception("check_model_drift_and_retrain failed: %s", exc)
-        raise
+        return {"status": "error", "reason": str(exc)}
     finally:
         session.close()
 

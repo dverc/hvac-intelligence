@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 from sklearn.calibration import CalibratedClassifierCV
+from sqlalchemy import select
 
 from app.core.constants import SEED_ORG_ID
+from app.models.ground_truth_label import GroundTruthLabel
+from app.pipeline.tasks import _maybe_record_call_outcome_ground_truth
 from app.ml.churn_model import (
     ChurnModelEnsemble,
     default_rule_score,
@@ -145,3 +149,112 @@ def test_default_scoring_when_no_model(monkeypatch, tmp_path):
     legacy = ensemble.predict(high_risk)
     assert legacy["status"] == "model_not_trained"
     assert legacy["churn_probability"] is None
+
+
+def test_dispatched_outcome_with_score_drop_creates_ground_truth_label(
+    sync_db_session, seeded_sync_customer
+):
+    customer_id = seeded_sync_customer["customer_id"]
+    feature_payload = {
+        "call_id": "call-gt-dispatched",
+        "customer_id": customer_id,
+        "call_features": {"call_outcome": "DISPATCHED"},
+    }
+    scoring = {"risk_tier": "MEDIUM", "churn_probability": 0.45}
+
+    result = _maybe_record_call_outcome_ground_truth(
+        sync_db_session,
+        feature_payload,
+        scoring,
+        score_before=0.65,
+        score_after=0.50,
+    )
+
+    assert result is not None
+    assert result["churned"] is False
+    sync_db_session.commit()
+
+    label = sync_db_session.execute(
+        select(GroundTruthLabel).where(
+            GroundTruthLabel.customer_id == uuid.UUID(customer_id),
+            GroundTruthLabel.notes.contains("call_id=call-gt-dispatched"),
+        )
+    ).scalar_one()
+    assert label.churned is False
+    assert "intervention_success" in (label.notes or "")
+
+
+def test_dispatched_outcome_small_score_drop_skips_ground_truth_label(
+    sync_db_session, seeded_sync_customer
+):
+    feature_payload = {
+        "call_id": "call-gt-ambiguous",
+        "customer_id": seeded_sync_customer["customer_id"],
+        "call_features": {"call_outcome": "DISPATCHED"},
+    }
+
+    result = _maybe_record_call_outcome_ground_truth(
+        sync_db_session,
+        feature_payload,
+        {"risk_tier": "MEDIUM"},
+        score_before=0.55,
+        score_after=0.50,
+    )
+
+    assert result is None
+
+
+def test_retraining_triggers_train_when_drift_and_sufficient_labels():
+    mock_db = MagicMock()
+    mock_db.scalar.return_value = 25
+
+    with (
+        patch(
+            "app.ml.retraining.check_model_drift",
+            return_value={
+                "psi": 0.35,
+                "status": "RETRAIN",
+                "needs_retraining": True,
+            },
+        ),
+        patch(
+            "app.ml.retraining.train_model_from_ground_truth",
+            return_value={
+                "status": "ok",
+                "model_version": "v_auto_test",
+                "sample_count": 25,
+                "auc_roc": 0.72,
+            },
+        ) as mock_train,
+        patch("app.pipeline.tasks.batch_rescore_customers") as mock_rescore,
+    ):
+        from app.ml.retraining import check_and_trigger_retraining
+
+        result = check_and_trigger_retraining(mock_db)
+
+    assert result["triggered"] is True
+    assert result["reason"] == "drift"
+    assert result["status"] == "RETRAIN"
+    mock_train.assert_called_once_with(mock_db)
+    mock_rescore.delay.assert_called_once()
+
+
+def test_retraining_skipped_when_drift_retrain_but_insufficient_labels():
+    mock_db = MagicMock()
+    mock_db.scalar.return_value = 5
+
+    with patch(
+        "app.ml.retraining.check_model_drift",
+        return_value={
+            "psi": 0.35,
+            "status": "RETRAIN",
+            "needs_retraining": True,
+        },
+    ):
+        from app.ml.retraining import check_and_trigger_retraining
+
+        result = check_and_trigger_retraining(mock_db)
+
+    assert result["triggered"] is False
+    assert result["reason"] == "insufficient_ground_truth"
+    assert result["ground_truth_count"] == 5

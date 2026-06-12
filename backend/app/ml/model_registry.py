@@ -142,3 +142,9 @@ def get_churn_ensemble() -> "ChurnModelEnsemble":
     ):
         _ensemble = ChurnModelEnsemble()
     return _ensemble
+
+
+def reset_churn_ensemble() -> None:
+    """Clear cached ensemble after a new model artifact is saved."""
+    global _ensemble
+    _ensemble = None
