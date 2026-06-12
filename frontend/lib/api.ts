@@ -1106,6 +1106,7 @@ export interface PortalIdentifyResult {
   found: boolean;
   customer_id?: string;
   name?: string;
+  timezone?: string;
   upcoming_appointments: PortalAppointment[];
   past_appointments: PortalAppointment[];
 }
@@ -1113,6 +1114,7 @@ export interface PortalIdentifyResult {
 export interface PortalAppointmentsResult {
   customer_id: string;
   name: string;
+  timezone?: string;
   upcoming_appointments: PortalAppointment[];
   past_appointments: PortalAppointment[];
 }

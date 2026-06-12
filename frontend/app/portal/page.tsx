@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
 
 import { ApiError, appendPortalOrgQuery, portalIdentify } from "@/lib/api";
 import { getOrgName } from "@/lib/config";
 import { formatPortalPhoneInput } from "@/lib/portal-format";
 
-export default function PortalLandingPage() {
+function PortalLandingPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const org = searchParams.get("org");
@@ -111,5 +111,13 @@ export default function PortalLandingPage() {
         </Link>
       </p>
     </div>
+  );
+}
+
+export default function PortalLandingPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <PortalLandingPageContent />
+    </Suspense>
   );
 }

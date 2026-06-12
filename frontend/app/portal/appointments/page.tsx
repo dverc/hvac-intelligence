@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 
 import {
   ApiError,
@@ -76,7 +76,7 @@ function AppointmentCard({
   );
 }
 
-export default function PortalAppointmentsPage() {
+function PortalAppointmentsPageContent() {
   const searchParams = useSearchParams();
   const phone = searchParams.get("phone") ?? "";
   const customerIdParam = searchParams.get("customer_id");
@@ -100,11 +100,7 @@ export default function PortalAppointmentsPage() {
           const data = await portalGetAppointments(customerIdParam, org);
           setCustomerId(data.customer_id);
           setName(data.name);
-          setTimezone(
-            typeof (data as { timezone?: string }).timezone === "string"
-              ? (data as { timezone: string }).timezone
-              : undefined,
-          );
+          setTimezone(data.timezone);
           setUpcoming(data.upcoming_appointments);
           setPast(data.past_appointments);
         } else if (phone) {
@@ -115,11 +111,7 @@ export default function PortalAppointmentsPage() {
           }
           setCustomerId(data.customer_id);
           setName(data.name ?? "");
-          setTimezone(
-            typeof (data as { timezone?: string }).timezone === "string"
-              ? (data as { timezone: string }).timezone
-              : undefined,
-          );
+          setTimezone(data.timezone);
           setUpcoming(data.upcoming_appointments);
           setPast(data.past_appointments);
         } else {
@@ -225,5 +217,13 @@ export default function PortalAppointmentsPage() {
         Request New Service
       </Link>
     </div>
+  );
+}
+
+export default function PortalAppointmentsPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <PortalAppointmentsPageContent />
+    </Suspense>
   );
 }

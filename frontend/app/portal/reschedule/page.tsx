@@ -26,6 +26,7 @@ function PortalReschedulePageContent() {
   const org = searchParams.get("org");
 
   const [appointment, setAppointment] = useState<PortalAppointment | null>(null);
+  const [timezone, setTimezone] = useState<string | undefined>(undefined);
   const [preferredDate, setPreferredDate] = useState("");
   const [preferredWindow, setPreferredWindow] = useState<string>(TIME_WINDOWS[0]);
   const [reason, setReason] = useState("");
@@ -43,6 +44,7 @@ function PortalReschedulePageContent() {
       }
       try {
         const data = await portalGetAppointments(customerId, org);
+        setTimezone(data.timezone);
         const match =
           data.upcoming_appointments.find((a) => a.id === appointmentId) ??
           data.past_appointments.find((a) => a.id === appointmentId);
@@ -137,6 +139,7 @@ function PortalReschedulePageContent() {
             {formatAppointmentWindow(
               appointment.scheduled_window_start,
               appointment.scheduled_window_end,
+              timezone,
             )}
           </p>
           <p className="mt-1 text-gray-500">Job #{appointment.job_number}</p>

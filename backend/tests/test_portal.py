@@ -232,6 +232,25 @@ async def test_resolve_portal_org_id_duplicate_org_names_returns_oldest(
 
 
 @pytest.mark.asyncio
+async def test_portal_appointments_rejects_cross_tenant_customer(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    seeded_customer,
+    make_org,
+):
+    org_b = await make_org(name="Portal Isolation Org B", slug="portal-isolation-b")
+    await db_session.flush()
+    customer_id = seeded_customer["customer_id"]
+
+    response = await api_client.get(
+        f"/api/v1/portal/appointments/{customer_id}",
+        params={"org": org_b.slug},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Customer not found"
+
+
+@pytest.mark.asyncio
 async def test_portal_reschedule_request(
     api_client: AsyncClient, db_session: AsyncSession, seeded_customer
 ):
