@@ -54,7 +54,7 @@ async def test_schedule_dispatch_rejects_double_booking(tool_executor, seeded_cu
         )
     )
     assert second.get("success") is False
-    assert second.get("error") == "conflict"
+    assert second.get("error_code") == "CONFLICT"
 
 
 @pytest.mark.asyncio
@@ -69,7 +69,7 @@ async def test_schedule_dispatch_succeeds_when_free(tool_executor, seeded_custom
         )
     )
     assert result.get("success") is True
-    assert result.get("job_number")
+    assert (result.get("data") or {}).get("job_number")
 
 
 @pytest.mark.asyncio

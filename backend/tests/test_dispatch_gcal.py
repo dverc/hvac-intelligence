@@ -127,7 +127,7 @@ async def test_cancelled_job_calls_delete_calendar_event(
         )
     )
     assert create_result.get("success") is True
-    job_id = create_result["job_id"]
+    job_id = (create_result.get("data") or {})["job_id"]
 
     job = await db_session.get(DispatchJob, uuid.UUID(job_id))
     job.google_calendar_event_id = "gcal-event-to-delete"

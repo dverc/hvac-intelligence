@@ -62,7 +62,7 @@ async def test_schedule_dispatch_creates_job_and_sends_sms(
         )
 
     assert result.get("success") is True, result
-    job_id = result.get("job_id")
+    job_id = (result.get("data") or {}).get("job_id")
     assert job_id
 
     job = await db_session.get(DispatchJob, uuid.UUID(job_id))

@@ -184,16 +184,51 @@ def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
+def _tool_response(
+    success: bool,
+    data: dict | None = None,
+    error_code: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "success": success,
+        "data": data,
+        "error_code": error_code,
+        "message": message,
+    }
+
+
+def _tool_response_json(
+    success: bool,
+    data: dict | None = None,
+    error_code: str | None = None,
+    message: str | None = None,
+) -> str:
+    return json.dumps(_tool_response(success, data, error_code, message))
+
+
+def _normalize_error_code(code: str | None) -> str | None:
+    if not code:
+        return None
+    return str(code).upper().replace(" ", "_").replace("-", "_")
+
+
 def _tool_result_status(result_value: Any) -> str:
-    if isinstance(result_value, dict) and result_value.get("error"):
-        return "error"
-    if isinstance(result_value, str):
+    parsed: dict[str, Any] | None = None
+    if isinstance(result_value, dict):
+        parsed = result_value
+    elif isinstance(result_value, str):
         try:
             parsed = json.loads(result_value)
-            if isinstance(parsed, dict) and parsed.get("error"):
-                return "error"
         except json.JSONDecodeError:
-            pass
+            return "success"
+    if isinstance(parsed, dict):
+        if parsed.get("success") is False:
+            return "error"
+        if parsed.get("error_code"):
+            return "error"
+        if parsed.get("error"):
+            return "error"
     return "success"
 
 
@@ -372,8 +407,12 @@ class ToolExecutor:
         if self.org_id is None:
             response = {
                 "toolCallId": tool_call_id,
-                "result": json.dumps(
-                    {"error": "Tenant not resolved for this call; cannot execute tools."}
+                "result": _tool_response_json(
+                    success=False,
+                    error_code="TENANT_NOT_RESOLVED",
+                    message=(
+                        "Tenant not resolved for this call; cannot execute tools."
+                    ),
                 ),
             }
             await _complete_tool_call_audit("error")
@@ -383,7 +422,11 @@ class ToolExecutor:
         if not handler_name:
             response = {
                 "toolCallId": tool_call_id,
-                "result": json.dumps({"error": f"Unknown tool: {tool_name}"}),
+                "result": _tool_response_json(
+                    success=False,
+                    error_code="UNKNOWN_TOOL",
+                    message=f"Unknown tool: {tool_name}",
+                ),
             }
             await _complete_tool_call_audit("error")
             return response
@@ -396,8 +439,12 @@ class ToolExecutor:
         ):
             response = {
                 "toolCallId": tool_call_id,
-                "result": json.dumps(
-                    {"error": f"Tool '{tool_name}' is not enabled for this organization."}
+                "result": _tool_response_json(
+                    success=False,
+                    error_code="TOOL_DISABLED",
+                    message=(
+                        f"Tool '{tool_name}' is not enabled for this organization."
+                    ),
                 ),
             }
             await _complete_tool_call_audit("error")
@@ -414,7 +461,11 @@ class ToolExecutor:
             logger.error("Tool %s failed: %s", tool_name, exc, exc_info=True)
             response = {
                 "toolCallId": tool_call_id,
-                "result": json.dumps({"error": str(exc)}),
+                "result": _tool_response_json(
+                    success=False,
+                    error_code="TOOL_EXECUTION_FAILED",
+                    message=str(exc),
+                ),
             }
             await _complete_tool_call_audit("error")
             return response
@@ -508,23 +559,32 @@ class ToolExecutor:
             issue_type=parsed.issue_type,
                         )
                     )
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "error": "slot_taken",
-                            "message": (
-                                "That time slot was just taken by another booking. "
-                                "Let me check what else is available."
-                            ),
-                            "available_slots": availability.get("available_slots", []),
+                    avail_data = availability.get("data") or {}
+                    return _tool_response_json(
+                        success=False,
+                        data={
+                            "available_slots": avail_data.get("available_slots", []),
                             "availability_message": availability.get("message"),
-                        }
+                        },
+                        error_code="SLOT_TAKEN",
+                        message=(
+                            "That time slot was just taken by another booking. "
+                            "Let me check what else is available."
+                        ),
                     )
             else:
                 result = await self.dispatch_service.create_job(**create_kwargs)
 
             if not result.get("success", True):
-                return json.dumps(result)
+                return _tool_response_json(
+                    success=False,
+                    data=result,
+                    error_code=_normalize_error_code(
+                        str(result.get("error", "DISPATCH_FAILED"))
+                    ),
+                    message=result.get("message")
+                    or str(result.get("error", "Failed to schedule dispatch")),
+                )
             job_id = result.get("job_id")
             if job_id:
                 try:
@@ -634,7 +694,11 @@ class ToolExecutor:
                     },
                     call_id=get_call_id() or None,
                 )
-            return json.dumps(result)
+            return _tool_response_json(
+                success=True,
+                data=result,
+                message=result.get("human_readable") or "Dispatch scheduled successfully.",
+            )
         finally:
             await redis_client.aclose()
 
@@ -672,15 +736,15 @@ class ToolExecutor:
             required_skill=required_skill,
         )
         if not slots:
-            return json.dumps(
-                {
-                    "available_slots": [],
-                    "message": (
-                        "I couldn't find any open appointment slots in that time range. "
-                        "Would you like me to check further out, or would you prefer "
-                        "to call back later?"
-                    ),
-                }
+            return _tool_response_json(
+                success=False,
+                data={"available_slots": []},
+                error_code="NO_AVAILABILITY",
+                message=(
+                    "I couldn't find any open appointment slots in that time range. "
+                    "Would you like me to check further out, or would you prefer "
+                    "to call back later?"
+                ),
             )
 
         formatted = [
@@ -696,34 +760,37 @@ class ToolExecutor:
         ]
         earliest = formatted[0]
         count = len(formatted)
-        return json.dumps(
-            {
-                "available_slots": formatted,
-                "message": (
-                    f"I found {count} available slot{'s' if count != 1 else ''}. "
-                    f"The earliest is {earliest['slot_label']} with "
-                    f"{earliest['technician']}. Which works best for you?"
-                ),
-            }
+        return _tool_response_json(
+            success=True,
+            data={"available_slots": formatted},
+            message=(
+                f"I found {count} available slot{'s' if count != 1 else ''}. "
+                f"The earliest is {earliest['slot_label']} with "
+                f"{earliest['technician']}. Which works best for you?"
+            ),
         )
 
     async def execute_query_churn_score(self, **kwargs: Any) -> str:
         customer_id = kwargs.get("customer_id", "")
         if _is_unresolved_template(customer_id):
-            return json.dumps(
-                {
-                    "error": (
-                        "customer_id is not available yet. Call get_customer_info first "
-                        "to resolve the customer_id, then retry query_churn_score."
-                    )
-                }
+            return _tool_response_json(
+                success=False,
+                error_code="CUSTOMER_ID_UNRESOLVED",
+                message=(
+                    "customer_id is not available yet. Call get_customer_info first "
+                    "to resolve the customer_id, then retry query_churn_score."
+                ),
             )
 
         parsed = QueryChurnScoreArgs.model_validate(kwargs)
         score = await self.churn_service.get_latest_score(
             parsed.customer_id, self.org_id
         )
-        return json.dumps(score)
+        return _tool_response_json(
+            success=True,
+            data=score,
+            message=f"Churn risk tier: {score.get('risk_tier', 'UNKNOWN')}.",
+        )
 
     async def execute_get_customer_info(self, **kwargs: Any) -> str:
         parsed = GetCustomerInfoArgs.model_validate(kwargs)
@@ -733,7 +800,15 @@ class ToolExecutor:
             )
             cached_profile = await cache_get(cache_key)
             if cached_profile is not None:
-                return json.dumps(cached_profile)
+                return _tool_response_json(
+                    success=bool(cached_profile.get("found", True)),
+                    data=cached_profile,
+                    message=(
+                        "Customer profile retrieved."
+                        if cached_profile.get("found")
+                        else "Customer not found."
+                    ),
+                )
 
         profile = await self.customer_service.get_customer_info(
             parsed.lookup_method, parsed.lookup_value, self.org_id
@@ -745,7 +820,15 @@ class ToolExecutor:
             )
             await cache_set(cache_key, profile, CUSTOMER_CACHE_TTL)
 
-        return json.dumps(profile)
+        return _tool_response_json(
+            success=bool(profile.get("found", True)),
+            data=profile,
+            message=(
+                "Customer profile retrieved."
+                if profile.get("found")
+                else "Customer not found."
+            ),
+        )
 
     async def execute_get_equipment_info(self, **kwargs: Any) -> str:
         parsed = GetEquipmentInfoArgs.model_validate(kwargs)
@@ -754,7 +837,12 @@ class ToolExecutor:
         # Ownership check: the customer must belong to this org.
         owner = await self.customer_service.get_by_id(cid, self.org_id)
         if owner is None:
-            return json.dumps({"found": False, "equipment": []})
+            return _tool_response_json(
+                success=False,
+                data={"found": False, "equipment": []},
+                error_code="CUSTOMER_NOT_FOUND",
+                message="Customer not found.",
+            )
 
         if parsed.equipment_id:
             rows = await self.db.execute(
@@ -768,8 +856,18 @@ class ToolExecutor:
             )
             row = rows.mappings().first()
             if row is None:
-                return json.dumps({"found": False, "equipment": []})
-            return json.dumps({"found": True, "equipment": [_serialize_equipment_row(row)]})
+                return _tool_response_json(
+                    success=False,
+                    data={"found": False, "equipment": []},
+                    error_code="EQUIPMENT_NOT_FOUND",
+                    message="Equipment not found.",
+                )
+            equipment = [_serialize_equipment_row(row)]
+            return _tool_response_json(
+                success=True,
+                data={"found": True, "equipment": equipment},
+                message="Equipment record retrieved.",
+            )
 
         rows = await self.db.execute(
             text(
@@ -782,7 +880,17 @@ class ToolExecutor:
             {"customer_id": cid},
         )
         equipment = [_serialize_equipment_row(r) for r in rows.mappings().all()]
-        return json.dumps({"found": bool(equipment), "equipment": equipment})
+        found = bool(equipment)
+        return _tool_response_json(
+            success=found,
+            data={"found": found, "equipment": equipment},
+            error_code=None if found else "EQUIPMENT_NOT_FOUND",
+            message=(
+                "Equipment records retrieved."
+                if found
+                else "No equipment found for this customer."
+            ),
+        )
 
     async def execute_rag_query(self, **kwargs: Any) -> str:
         parsed = RagKnowledgeQueryArgs.model_validate(kwargs)
@@ -803,19 +911,23 @@ class ToolExecutor:
             filter_model=parsed.equipment_model,
         )
         sanitized_chunks = _sanitize_rag_chunks(chunks, self.org_id)
-        return json.dumps({"retrieved_context": sanitized_chunks})
+        return _tool_response_json(
+            success=True,
+            data={"retrieved_context": sanitized_chunks},
+            message=f"Retrieved {len(sanitized_chunks)} knowledge chunk(s).",
+        )
 
     async def execute_lookup_service_info(self, **kwargs: Any) -> str:
         try:
             parsed = LookupServiceInfoArgs.model_validate(kwargs)
         except Exception as exc:
-            return json.dumps(
-                {
-                    "error": (
-                        "Provide at least one of query, category, or service_code. "
-                        f"Details: {exc}"
-                    )
-                }
+            return _tool_response_json(
+                success=False,
+                error_code="INVALID_REQUEST",
+                message=(
+                    "Provide at least one of query, category, or service_code. "
+                    f"Details: {exc}"
+                ),
             )
 
         results = await self.service_catalog_service.lookup(
@@ -825,16 +937,15 @@ class ToolExecutor:
             service_code=parsed.service_code,
         )
         if not results:
-            return json.dumps(
-                {
-                    "services_found": 0,
-                    "results": [],
-                    "message": (
-                        "I couldn't find any services matching that request. "
-                        "Try asking about a different service, or speak with a "
-                        "technician for a custom quote."
-                    ),
-                }
+            return _tool_response_json(
+                success=False,
+                data={"services_found": 0, "results": []},
+                error_code="NO_SERVICES_FOUND",
+                message=(
+                    "I couldn't find any services matching that request. "
+                    "Try asking about a different service, or speak with a "
+                    "technician for a custom quote."
+                ),
             )
 
         formatted = [
@@ -848,12 +959,13 @@ class ToolExecutor:
             for item in results
         ]
         count = len(formatted)
-        return json.dumps(
-            {
-                "services_found": count,
-                "results": formatted,
-                "message": f"I found {count} service{'s' if count != 1 else ''} matching your question.",
-            }
+        return _tool_response_json(
+            success=True,
+            data={"services_found": count, "results": formatted},
+            message=(
+                f"I found {count} service{'s' if count != 1 else ''} "
+                "matching your question."
+            ),
         )
 
     async def execute_create_ticket(self, **kwargs: Any) -> str:
@@ -866,13 +978,13 @@ class ToolExecutor:
         )
         missing_fields = [field for field in required_fields if not kwargs.get(field)]
         if missing_fields:
-            return json.dumps(
-                {
-                    "error": (
-                        "Missing required fields. Please collect customer_id, ticket_type, "
-                        "subject, description, and priority before calling this tool."
-                    )
-                }
+            return _tool_response_json(
+                success=False,
+                error_code="MISSING_REQUIRED_FIELDS",
+                message=(
+                    "Missing required fields. Please collect customer_id, ticket_type, "
+                    "subject, description, and priority before calling this tool."
+                ),
             )
 
         parsed = CreateSupportTicketArgs.model_validate(kwargs)
@@ -881,7 +993,11 @@ class ToolExecutor:
             uuid.UUID(parsed.customer_id), self.org_id
         )
         if owner is None:
-            return json.dumps({"error": f"Customer {parsed.customer_id} not found"})
+            return _tool_response_json(
+                success=False,
+                error_code="CUSTOMER_NOT_FOUND",
+                message=f"Customer {parsed.customer_id} not found",
+            )
         ticket = await self.ticket_service.create_ticket(
             customer_id=uuid.UUID(parsed.customer_id),
             org_id=self.org_id,
@@ -907,13 +1023,22 @@ class ToolExecutor:
                     },
                     call_id=get_call_id() or None,
         )
-        return json.dumps({"success": True, "ticket": ticket})
+        return _tool_response_json(
+            success=True,
+            data={"ticket": ticket},
+            message="Support ticket created.",
+        )
 
     async def execute_create_customer(self, **kwargs: Any) -> str:
         parsed = CreateCustomerArgs.model_validate(kwargs)
         result = await self.customer_service.create_customer(parsed, self.org_id)
         if not result.get("success"):
-            return json.dumps({"error": result.get("error", "Failed to create customer")})
+            return _tool_response_json(
+                success=False,
+                data=result,
+                error_code="CREATE_CUSTOMER_FAILED",
+                message=result.get("error", "Failed to create customer"),
+            )
         if self.org_id is not None:
             await log_action(
                     self.db,
@@ -933,25 +1058,26 @@ class ToolExecutor:
             sync_new_customer_to_jobber.delay(
                 str(self.org_id), result["customer_id"]
             )
-        return json.dumps(
-            {
+        return _tool_response_json(
+            success=True,
+            data={
                 "status": "created",
                 "customer_id": result["customer_id"],
-                "message": result["message"],
-            }
+            },
+            message=result["message"],
         )
 
     async def execute_update_customer(self, **kwargs: Any) -> str:
         try:
             parsed = UpdateCustomerArgs.model_validate(kwargs)
         except Exception as exc:
-            return json.dumps(
-                {
-                    "error": (
-                        "Invalid update request. Provide customer_id and at least one "
-                        f"field to update. Details: {exc}"
-                    )
-                }
+            return _tool_response_json(
+                success=False,
+                error_code="INVALID_REQUEST",
+                message=(
+                    "Invalid update request. Provide customer_id and at least one "
+                    f"field to update. Details: {exc}"
+                ),
             )
 
         address_fields: dict[str, str] = {}
@@ -990,7 +1116,11 @@ class ToolExecutor:
             self.org_id,
         )
         if customer is None:
-            return json.dumps({"error": f"Customer {parsed.customer_id} not found"})
+            return _tool_response_json(
+                success=False,
+                error_code="CUSTOMER_NOT_FOUND",
+                message=f"Customer {parsed.customer_id} not found",
+            )
 
         if self.org_id is not None:
             if existing_customer is not None:
@@ -1024,13 +1154,14 @@ class ToolExecutor:
                     call_id=get_call_id() or None,
                 )
 
-        return json.dumps(
-            {
+        return _tool_response_json(
+            success=True,
+            data={
                 "status": "updated",
                 "customer_id": parsed.customer_id,
                 "updated_fields": sorted(set(updated_fields)),
-                "message": "Account updated successfully.",
-            }
+            },
+            message="Account updated successfully.",
         )
 
     async def execute_create_equipment(self, **kwargs: Any) -> str:
@@ -1038,7 +1169,12 @@ class ToolExecutor:
         equipment_service = EquipmentService(self.db)
         result = await equipment_service.create_equipment(parsed, self.org_id)
         if not result.get("success"):
-            return json.dumps({"error": result.get("error", "Failed to create equipment")})
+            return _tool_response_json(
+                success=False,
+                data=result,
+                error_code="CREATE_EQUIPMENT_FAILED",
+                message=result.get("error", "Failed to create equipment"),
+            )
         if self.org_id is not None:
             await log_action(
                     self.db,
@@ -1053,15 +1189,19 @@ class ToolExecutor:
                     },
                     call_id=get_call_id() or None,
                 )
-        return json.dumps(
-            {
+        return _tool_response_json(
+            success=True,
+            data={
                 "status": "created",
                 "equipment_id": result["equipment_id"],
-                "message": (
-                    f"Equipment registered: {result['make']} {result['model']} "
-                    f"({result['equipment_type']})."
-                ),
-            }
+                "make": result.get("make"),
+                "model": result.get("model"),
+                "equipment_type": result.get("equipment_type"),
+            },
+            message=(
+                f"Equipment registered: {result['make']} {result['model']} "
+                f"({result['equipment_type']})."
+            ),
         )
 
     async def _submit_dispatch_cancellation_request(
@@ -1074,8 +1214,12 @@ class ToolExecutor:
         from sqlalchemy.orm import selectinload
 
         if self.org_id is None:
-            return json.dumps(
-                {"error": "Tenant not resolved for this call; cannot process cancellation."}
+            return _tool_response_json(
+                success=False,
+                error_code="TENANT_NOT_RESOLVED",
+                message=(
+                    "Tenant not resolved for this call; cannot process cancellation."
+                ),
             )
 
         job = await self.db.get(
@@ -1084,7 +1228,11 @@ class ToolExecutor:
             options=[selectinload(DispatchJob.customer)],
         )
         if job is None or job.org_id != self.org_id:
-            return json.dumps({"error": f"Dispatch job {parsed.job_id} not found"})
+            return _tool_response_json(
+                success=False,
+                error_code="DISPATCH_JOB_NOT_FOUND",
+                message=f"Dispatch job {parsed.job_id} not found",
+            )
 
         customer_name = (
             job.customer.full_name if job.customer is not None else "Unknown customer"
@@ -1149,14 +1297,15 @@ class ToolExecutor:
             "A team member will confirm the cancellation within 2 hours and "
             "you'll receive notification."
         )
-        return json.dumps(
-            {
+        return _tool_response_json(
+            success=True,
+            data={
                 "status": "pending_approval",
                 "job_id": str(job.job_id),
                 "job_number": job.job_number,
                 "ticket_id": ticket["ticket_id"],
-                "message": message,
-            }
+            },
+            message=message,
         )
 
     async def execute_update_dispatch(self, **kwargs: Any) -> str:
@@ -1166,7 +1315,14 @@ class ToolExecutor:
 
         result = await self.dispatch_service.update_job(parsed, self.org_id)
         if not result.get("success"):
-            return json.dumps({"error": result.get("error", "Failed to update dispatch")})
+            return _tool_response_json(
+                success=False,
+                data=result,
+                error_code=_normalize_error_code(
+                    str(result.get("error", "UPDATE_DISPATCH_FAILED"))
+                ),
+                message=result.get("error", "Failed to update dispatch"),
+            )
         if self.org_id is not None:
             await log_action(
                     self.db,
@@ -1178,31 +1334,45 @@ class ToolExecutor:
                     new_value=parsed.model_dump(exclude_none=True),
                     call_id=get_call_id() or None,
                 )
-        return json.dumps(
-            {
+        return _tool_response_json(
+            success=True,
+            data={
                 "status": "updated",
                 "job_id": result["job_id"],
-                "message": result["message"],
-            }
+            },
+            message=result["message"],
         )
 
     async def execute_check_service_area(self, **kwargs: Any) -> str:
         try:
             address = str(kwargs.get("address") or "").strip()
             if not address:
-                return "Please provide the service address so I can check coverage."
+                return _tool_response_json(
+                    success=False,
+                    error_code="MISSING_ADDRESS",
+                    message="Please provide the service address so I can check coverage.",
+                )
 
             org = await self.db.get(Organization, self.org_id)
             settings = org.settings or {} if org is not None else {}
-            _serviceable, message = is_address_serviceable(address, settings)
-            return message
+            serviceable, message = is_address_serviceable(address, settings)
+            return _tool_response_json(
+                success=True,
+                data={"serviceable": serviceable},
+                message=message,
+            )
         except Exception:
             logger.exception("check_service_area failed | org_id=%s", self.org_id)
-            return (
-                "I couldn't verify the service area right now — we can continue with booking."
+            return _tool_response_json(
+                success=False,
+                error_code="SERVICE_AREA_CHECK_FAILED",
+                message=(
+                    "I couldn't verify the service area right now — "
+                    "we can continue with booking."
+                ),
             )
 
-    async def execute_transfer_call(self, **kwargs: Any) -> str | dict[str, Any]:
+    async def execute_transfer_call(self, **kwargs: Any) -> str:
         try:
             reason = kwargs.get("reason", "Customer requested human agent")
             org = await self.db.get(Organization, self.org_id)
@@ -1213,9 +1383,13 @@ class ToolExecutor:
                     self.org_id,
                     reason,
                 )
-                return (
-                    "Transfer is not available for this account. "
-                    "I'll create a callback request for you instead."
+                return _tool_response_json(
+                    success=False,
+                    error_code="TRANSFER_UNAVAILABLE",
+                    message=(
+                        "Transfer is not available for this account. "
+                        "I'll create a callback request for you instead."
+                    ),
                 )
 
             logger.info(
@@ -1223,18 +1397,25 @@ class ToolExecutor:
                 self.org_id,
                 reason,
             )
-            return {
-                "destination": {
-                    "type": "number",
-                    "number": transfer_phone_number,
+            return _tool_response_json(
+                success=True,
+                data={
+                    "destination": {
+                        "type": "number",
+                        "number": transfer_phone_number,
+                    },
                 },
-                "message": "Please hold while I transfer you to our team.",
-            }
+                message="Please hold while I transfer you to our team.",
+            )
         except Exception:
             logger.exception("transfer_call failed | org_id=%s", self.org_id)
-            return (
-                "I'm unable to transfer the call right now. "
-                "I'll create a callback request for you instead."
+            return _tool_response_json(
+                success=False,
+                error_code="TRANSFER_FAILED",
+                message=(
+                    "I'm unable to transfer the call right now. "
+                    "I'll create a callback request for you instead."
+                ),
             )
 
 

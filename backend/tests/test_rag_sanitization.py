@@ -105,6 +105,6 @@ async def test_execute_rag_query_returns_sanitized_chunks(db_session, mock_rag_r
             top_k=1,
         )
     )
-    text = payload["retrieved_context"][0]["text"]
+    text = payload["data"]["retrieved_context"][0]["text"]
     assert text.startswith(RAG_REFERENCE_PREFIX)
     assert "Filter replacement is recommended every 90 days." in text

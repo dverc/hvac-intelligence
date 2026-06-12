@@ -18,6 +18,14 @@ from app.services.ticket_service import TicketService
 from app.services.tool_executor import ToolExecutor
 
 
+def _parse_tool_result(raw: str) -> dict:
+    return json.loads(raw)
+
+
+def _tool_data(envelope: dict) -> dict:
+    return envelope.get("data") or {}
+
+
 @pytest_asyncio.fixture
 async def marcus_and_elena_technicians(db_session):
     """Marcus (highest rating) and Elena for preferred-window name routing tests."""
@@ -98,8 +106,10 @@ async def test_execute_batch_parses_nested_function_tool_call(
     results = await tool_executor.execute_batch(tool_call_list)
     assert results[0]["toolCallId"] == "tc-nested"
     payload = json.loads(results[0]["result"])
-    assert "churn_probability" in payload
-    assert payload["risk_tier"] == "HIGH"
+    data = _tool_data(payload)
+    assert payload["success"] is True
+    assert "churn_probability" in data
+    assert data["risk_tier"] == "HIGH"
 
 
 @pytest.mark.asyncio
@@ -118,7 +128,8 @@ async def test_execute_batch_parses_stringified_function_arguments(
     ]
     results = await tool_executor.execute_batch(tool_call_list)
     payload = json.loads(results[0]["result"])
-    assert payload["risk_tier"] == "HIGH"
+    assert payload["success"] is True
+    assert _tool_data(payload)["risk_tier"] == "HIGH"
 
 
 @pytest.mark.asyncio
@@ -126,7 +137,7 @@ async def test_schedule_dispatch_picks_elena_when_name_in_preferred_window(
     tool_executor, seeded_customer, marcus_and_elena_technicians, db_session
 ):
     elena = marcus_and_elena_technicians["elena"]
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_schedule_dispatch(
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_FAILURE",
@@ -135,10 +146,11 @@ async def test_schedule_dispatch_picks_elena_when_name_in_preferred_window(
             issue_description="Unit not cooling",
         )
     )
-    assert result.get("success") is True, result
-    assert result["technician"]["name"].startswith("Elena")
+    data = _tool_data(result)
+    assert result["success"] is True, result
+    assert data["technician"]["name"].startswith("Elena")
 
-    job = await db_session.get(DispatchJob, uuid.UUID(result["job_id"]))
+    job = await db_session.get(DispatchJob, uuid.UUID(data["job_id"]))
     assert job.technician_id == elena.technician_id
 
 
@@ -151,7 +163,7 @@ async def test_schedule_dispatch_falls_back_when_named_technician_unavailable(
     window = "monday morning with Elena"
     customer_id = seeded_customer["customer_id"]
 
-    first = json.loads(
+    first = _parse_tool_result(
         await tool_executor.execute_schedule_dispatch(
             customer_id=customer_id,
             issue_type="AC_FAILURE",
@@ -160,10 +172,10 @@ async def test_schedule_dispatch_falls_back_when_named_technician_unavailable(
             issue_description="First booking for Elena",
         )
     )
-    assert first.get("success") is True, first
-    assert first["technician"]["name"].startswith("Elena")
+    assert first["success"] is True, first
+    assert _tool_data(first)["technician"]["name"].startswith("Elena")
 
-    second = json.loads(
+    second = _parse_tool_result(
         await tool_executor.execute_schedule_dispatch(
             customer_id=customer_id,
             issue_type="AC_FAILURE",
@@ -172,10 +184,10 @@ async def test_schedule_dispatch_falls_back_when_named_technician_unavailable(
             issue_description="Fallback booking",
         )
     )
-    assert second.get("success") is True, second
-    assert second["technician"]["name"].startswith("Marcus")
+    assert second["success"] is True, second
+    assert _tool_data(second)["technician"]["name"].startswith("Marcus")
 
-    job = await db_session.get(DispatchJob, uuid.UUID(second["job_id"]))
+    job = await db_session.get(DispatchJob, uuid.UUID(_tool_data(second)["job_id"]))
     assert job.technician_id == marcus.technician_id
     assert job.technician_id != elena.technician_id
 
@@ -183,7 +195,7 @@ async def test_schedule_dispatch_falls_back_when_named_technician_unavailable(
 @pytest.mark.asyncio
 async def test_schedule_dispatch_creates_job(tool_executor, seeded_customer, db_session):
     customer_id = seeded_customer["customer_id"]
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_schedule_dispatch(
             customer_id=customer_id,
             issue_type="AC_FAILURE",
@@ -192,8 +204,9 @@ async def test_schedule_dispatch_creates_job(tool_executor, seeded_customer, db_
             issue_description="Unit not cooling",
         )
     )
-    assert result.get("success") is True, result
-    assert result["job_number"]
+    data = _tool_data(result)
+    assert result["success"] is True, result
+    assert data["job_number"]
 
     row = await db_session.execute(
         select(DispatchJob).where(DispatchJob.customer_id == uuid.UUID(customer_id))
@@ -205,17 +218,18 @@ async def test_schedule_dispatch_creates_job(tool_executor, seeded_customer, db_
 
 @pytest.mark.asyncio
 async def test_query_churn_score_rejects_unresolved_template_customer_id(tool_executor):
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_query_churn_score(customer_id="{{customer_id}}")
     )
-    assert "error" in result
-    assert "get_customer_info" in result["error"]
+    assert result["success"] is False
+    assert "get_customer_info" in result["message"]
 
 
 @pytest.mark.asyncio
 async def test_create_support_ticket_rejects_missing_required_fields(tool_executor):
-    result = json.loads(await tool_executor.execute_create_ticket())
-    assert result["error"] == (
+    result = _parse_tool_result(await tool_executor.execute_create_ticket())
+    assert result["success"] is False
+    assert result["message"] == (
         "Missing required fields. Please collect customer_id, ticket_type, "
         "subject, description, and priority before calling this tool."
     )
@@ -223,27 +237,31 @@ async def test_create_support_ticket_rejects_missing_required_fields(tool_execut
 
 @pytest.mark.asyncio
 async def test_query_churn_score_schema(tool_executor, seeded_customer):
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_query_churn_score(
             customer_id=seeded_customer["customer_id"]
         )
     )
-    assert "churn_probability" in result
-    assert "risk_tier" in result
-    assert result["risk_tier"] in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+    data = _tool_data(result)
+    assert result["success"] is True
+    assert "churn_probability" in data
+    assert "risk_tier" in data
+    assert data["risk_tier"] in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 
 
 @pytest.mark.asyncio
 async def test_get_customer_info_returns_profile(tool_executor, seeded_customer):
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_get_customer_info(
             lookup_method="phone",
             lookup_value=seeded_customer["phone"],
         )
     )
-    assert result["found"] is True
-    assert result["equipment"]
-    assert "open_tickets" in result
+    data = _tool_data(result)
+    assert result["success"] is True
+    assert data["found"] is True
+    assert data["equipment"]
+    assert "open_tickets" in data
 
 
 @pytest.mark.asyncio
@@ -292,20 +310,22 @@ async def test_create_support_ticket_persists(tool_executor, seeded_customer, db
 async def test_get_equipment_info_returns_view_data(
     tool_executor, seeded_customer
 ):
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_get_equipment_info(
             customer_id=seeded_customer["customer_id"]
         )
     )
-    assert result["found"] is True
-    assert len(result["equipment"]) >= 1
-    assert result["equipment"][0].get("make") == "Carrier"
+    data = _tool_data(result)
+    assert result["success"] is True
+    assert data["found"] is True
+    assert len(data["equipment"]) >= 1
+    assert data["equipment"][0].get("make") == "Carrier"
 
 
 @pytest.mark.asyncio
 async def test_create_customer_success(tool_executor, db_session):
     phone = "+15559998877"
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_create_customer(
             full_name="Jane Newcaller",
             phone_primary=phone,
@@ -316,8 +336,10 @@ async def test_create_customer_success(tool_executor, db_session):
             email="jane@example.com",
         )
     )
-    assert result["status"] == "created"
-    assert result["customer_id"]
+    data = _tool_data(result)
+    assert result["success"] is True
+    assert data["status"] == "created"
+    assert data["customer_id"]
     assert "Jane Newcaller" in result["message"]
 
     from app.models.customer import Customer
@@ -335,7 +357,7 @@ async def test_create_customer_success(tool_executor, db_session):
 async def test_create_customer_duplicate_phone_returns_error(
     tool_executor, seeded_customer
 ):
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_create_customer(
             full_name="Duplicate Test",
             phone_primary=seeded_customer["phone"],
@@ -345,14 +367,14 @@ async def test_create_customer_duplicate_phone_returns_error(
             service_address_zip="92618",
         )
     )
-    assert "error" in result
-    assert "already exists" in result["error"]
+    assert result["success"] is False
+    assert "already exists" in result["message"]
 
 
 @pytest.mark.asyncio
 async def test_update_customer_updates_address(tool_executor, seeded_customer, db_session):
     customer_id = seeded_customer["customer_id"]
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_update_customer(
             customer_id=customer_id,
             service_address_line1="165 Deeley St",
@@ -361,8 +383,10 @@ async def test_update_customer_updates_address(tool_executor, seeded_customer, d
             service_address_zip="92614",
         )
     )
-    assert result["status"] == "updated"
-    assert "service_address_line1" in result["updated_fields"]
+    data = _tool_data(result)
+    assert result["success"] is True
+    assert data["status"] == "updated"
+    assert "service_address_line1" in data["updated_fields"]
 
     from app.models.customer import Customer
 
@@ -373,19 +397,19 @@ async def test_update_customer_updates_address(tool_executor, seeded_customer, d
 
 @pytest.mark.asyncio
 async def test_update_customer_empty_args_returns_validation_error(tool_executor, seeded_customer):
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_update_customer(
             customer_id=seeded_customer["customer_id"],
         )
     )
-    assert "error" in result
-    assert "at least one field" in result["error"].lower()
+    assert result["success"] is False
+    assert "at least one field" in result["message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_create_equipment_success(tool_executor, seeded_customer, db_session):
     customer_id = seeded_customer["customer_id"]
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_create_equipment(
             customer_id=customer_id,
             equipment_type="FURNACE",
@@ -394,8 +418,10 @@ async def test_create_equipment_success(tool_executor, seeded_customer, db_sessi
             install_year=2019,
         )
     )
-    assert result["status"] == "created"
-    assert result["equipment_id"]
+    data = _tool_data(result)
+    assert result["success"] is True
+    assert data["status"] == "created"
+    assert data["equipment_id"]
 
     from app.models.equipment import Equipment
 
@@ -410,7 +436,7 @@ async def test_create_equipment_success(tool_executor, seeded_customer, db_sessi
 async def test_update_dispatch_address_correction_appended_to_notes(
     tool_executor, seeded_customer, db_session
 ):
-    dispatch_result = json.loads(
+    dispatch_result = _parse_tool_result(
         await tool_executor.execute_schedule_dispatch(
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_FAILURE",
@@ -419,16 +445,17 @@ async def test_update_dispatch_address_correction_appended_to_notes(
             issue_description="Unit not cooling",
         )
     )
-    assert dispatch_result.get("success") is True, dispatch_result
-    job_id = dispatch_result["job_id"]
+    assert dispatch_result["success"] is True, dispatch_result
+    job_id = _tool_data(dispatch_result)["job_id"]
 
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_update_dispatch(
             job_id=job_id,
             service_address_override="165 Deeley, Irvine CA",
         )
     )
-    assert result["status"] == "updated"
+    assert result["success"] is True
+    assert _tool_data(result)["status"] == "updated"
 
     job = await db_session.get(DispatchJob, uuid.UUID(job_id))
     assert "ADDRESS CORRECTION: 165 Deeley, Irvine CA" in (job.issue_description or "")
@@ -438,7 +465,7 @@ async def test_update_dispatch_address_correction_appended_to_notes(
 async def test_update_dispatch_cancel_creates_approval_ticket_not_immediate_cancel(
     tool_executor, seeded_customer, db_session
 ):
-    dispatch_result = json.loads(
+    dispatch_result = _parse_tool_result(
         await tool_executor.execute_schedule_dispatch(
             customer_id=seeded_customer["customer_id"],
             issue_type="AC_FAILURE",
@@ -447,17 +474,18 @@ async def test_update_dispatch_cancel_creates_approval_ticket_not_immediate_canc
             issue_description="No longer needed",
         )
     )
-    assert dispatch_result.get("success") is True, dispatch_result
-    job_id = dispatch_result["job_id"]
+    assert dispatch_result["success"] is True, dispatch_result
+    job_id = _tool_data(dispatch_result)["job_id"]
 
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_update_dispatch(
             job_id=job_id,
             cancel=True,
             notes="Customer traveling out of town",
         )
     )
-    assert result["status"] == "pending_approval"
+    assert result["success"] is True
+    assert _tool_data(result)["status"] == "pending_approval"
     assert "cancellation request" in result["message"].lower()
     assert "team member" in result["message"].lower()
 
@@ -499,28 +527,33 @@ async def test_lookup_service_info_by_service_code(tool_executor, db_session):
     )
     await db_session.commit()
 
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_lookup_service_info(service_code="TOOL_LOOKUP")
     )
-    assert result["services_found"] == 1
-    assert result["results"][0]["price_range"] == "$89 - $129"
+    data = _tool_data(result)
+    assert result["success"] is True
+    assert data["services_found"] == 1
+    assert data["results"][0]["price_range"] == "$89 - $129"
 
 
 @pytest.mark.asyncio
 async def test_lookup_service_info_no_results_helpful_message(tool_executor):
-    result = json.loads(
+    result = _parse_tool_result(
         await tool_executor.execute_lookup_service_info(
             service_code="NONEXISTENT_SERVICE_XYZ"
         )
     )
-    assert result["services_found"] == 0
+    data = _tool_data(result)
+    assert result["success"] is False
+    assert data["services_found"] == 0
     assert "technician" in result["message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_lookup_service_info_validation_error_without_args(tool_executor):
-    result = json.loads(await tool_executor.execute_lookup_service_info())
-    assert "error" in result
+    result = _parse_tool_result(await tool_executor.execute_lookup_service_info())
+    assert result["success"] is False
+    assert result["error_code"] == "INVALID_REQUEST"
 
 
 @pytest.mark.asyncio
@@ -534,14 +567,16 @@ async def test_transfer_call_returns_destination_when_phone_set(
     org.transfer_phone_number = "+19491234567"
     await db_session.flush()
 
-    result = await tool_executor.execute_transfer_call(
-        reason="Customer requested human agent"
+    result = _parse_tool_result(
+        await tool_executor.execute_transfer_call(
+            reason="Customer requested human agent"
+        )
     )
 
-    assert isinstance(result, dict)
-    assert "destination" in result
-    assert result["destination"]["type"] == "number"
-    assert result["destination"]["number"] == "+19491234567"
+    assert result["success"] is True
+    destination = _tool_data(result)["destination"]
+    assert destination["type"] == "number"
+    assert destination["number"] == "+19491234567"
 
 
 @pytest.mark.asyncio
@@ -555,11 +590,10 @@ async def test_transfer_call_returns_fallback_when_no_phone_set(
     org.transfer_phone_number = None
     await db_session.flush()
 
-    result = await tool_executor.execute_transfer_call()
+    result = _parse_tool_result(await tool_executor.execute_transfer_call())
 
-    assert isinstance(result, str)
-    assert not isinstance(result, dict)
-    assert "callback" in result.lower()
+    assert result["success"] is False
+    assert "callback" in result["message"].lower()
 
 
 @pytest.mark.asyncio
@@ -652,4 +686,5 @@ async def test_execute_single_audit_logging_failure_does_not_break_tool(
 
     assert result["toolCallId"] == "tc-audit-fail"
     payload = json.loads(result["result"])
-    assert "churn_probability" in payload
+    assert payload["success"] is True
+    assert "churn_probability" in _tool_data(payload)
