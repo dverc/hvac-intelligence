@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -49,6 +50,7 @@ from app.services.availability_service import AvailabilityService
 from app.services.audit_service import (
     ACTOR_VAPI,
     AUDIT_CREATE,
+    AUDIT_TOOL_CALL,
     AUDIT_UPDATE,
     log_action,
 )
@@ -182,6 +184,19 @@ def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
+def _tool_result_status(result_value: Any) -> str:
+    if isinstance(result_value, dict) and result_value.get("error"):
+        return "error"
+    if isinstance(result_value, str):
+        try:
+            parsed = json.loads(result_value)
+            if isinstance(parsed, dict) and parsed.get("error"):
+                return "error"
+        except json.JSONDecodeError:
+            pass
+    return "success"
+
+
 class ToolExecutor:
     def __init__(
         self,
@@ -222,6 +237,35 @@ class ToolExecutor:
     @property
     def db(self) -> AsyncSession:
         return self.customer_service.db
+
+    async def _log_tool_call_audit(
+        self,
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        payload: dict[str, Any],
+        call_id: str | None,
+    ) -> None:
+        if self.org_id is None:
+            return
+        try:
+            await log_action(
+                self.db,
+                str(self.org_id),
+                ACTOR_VAPI,
+                AUDIT_TOOL_CALL,
+                "tool_call",
+                tool_call_id or tool_name,
+                new_value=payload,
+                call_id=call_id,
+            )
+        except Exception:
+            logger.exception(
+                "Tool call audit logging failed | org_id=%s tool=%s tool_call_id=%s",
+                self.org_id,
+                tool_name,
+                tool_call_id,
+            )
 
     def _clone_for_session(self, session: AsyncSession) -> ToolExecutor:
         """Build a tenant-scoped executor whose services share one isolated session."""
@@ -288,29 +332,61 @@ class ToolExecutor:
             return await self._run_with_isolated_session(tool_call)
 
         tool_call_id, tool_name, args = _parse_vapi_tool_call(tool_call)
+        redacted_args = _redact_args(args)
+        call_id = get_call_id() or None
+        started_at = time.perf_counter()
         logger.info(
             "Executing Vapi tool call id=%s call_id=%s name=%s args=%s",
             tool_call_id,
-            get_call_id(),
+            call_id,
             tool_name,
-            _redact_args(args),
+            redacted_args,
         )
+
+        await self._log_tool_call_audit(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            call_id=call_id,
+            payload={
+                "phase": "started",
+                "tool_name": tool_name,
+                "args": redacted_args,
+            },
+        )
+
+        async def _complete_tool_call_audit(status: str) -> None:
+            latency_ms = round((time.perf_counter() - started_at) * 1000)
+            await self._log_tool_call_audit(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                call_id=call_id,
+                payload={
+                    "phase": "completed",
+                    "tool_name": tool_name,
+                    "status": status,
+                    "latency_ms": latency_ms,
+                },
+            )
 
         # FAIL CLOSED: never run a tenant-scoped write/read without a resolved org.
         if self.org_id is None:
-            return {
+            response = {
                 "toolCallId": tool_call_id,
                 "result": json.dumps(
                     {"error": "Tenant not resolved for this call; cannot execute tools."}
                 ),
             }
+            await _complete_tool_call_audit("error")
+            return response
 
         handler_name = TOOL_REGISTRY.get(tool_name)
         if not handler_name:
-            return {
+            response = {
                 "toolCallId": tool_call_id,
                 "result": json.dumps({"error": f"Unknown tool: {tool_name}"}),
             }
+            await _complete_tool_call_audit("error")
+            return response
 
         # Enforce per-org enabled_tools server-side (None = all tools enabled).
         if (
@@ -318,24 +394,30 @@ class ToolExecutor:
             and self.org_settings.enabled_tools is not None
             and tool_name not in self.org_settings.enabled_tools
         ):
-            return {
+            response = {
                 "toolCallId": tool_call_id,
                 "result": json.dumps(
                     {"error": f"Tool '{tool_name}' is not enabled for this organization."}
                 ),
             }
+            await _complete_tool_call_audit("error")
+            return response
 
         try:
             handler = getattr(self, handler_name)
             with observe_tool_execution(tool_name):
                 result = await handler(**args)
-            return {"toolCallId": tool_call_id, "result": result}
+            response = {"toolCallId": tool_call_id, "result": result}
+            await _complete_tool_call_audit(_tool_result_status(result))
+            return response
         except Exception as exc:
             logger.error("Tool %s failed: %s", tool_name, exc, exc_info=True)
-            return {
+            response = {
                 "toolCallId": tool_call_id,
                 "result": json.dumps({"error": str(exc)}),
             }
+            await _complete_tool_call_audit("error")
+            return response
 
     async def execute_schedule_dispatch(self, **kwargs: Any) -> str:
         from app.core.config import get_settings

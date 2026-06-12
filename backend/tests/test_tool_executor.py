@@ -2,7 +2,7 @@ import json
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -560,3 +560,96 @@ async def test_transfer_call_returns_fallback_when_no_phone_set(
     assert isinstance(result, str)
     assert not isinstance(result, dict)
     assert "callback" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_execute_single_logs_tool_call_audit_before_and_after(
+    tool_executor, seeded_customer
+):
+    from app.services.audit_service import ACTOR_VAPI, AUDIT_TOOL_CALL
+
+    tool_call = {
+        "id": "tc-audit-1",
+        "function": {
+            "name": "query_churn_score",
+            "arguments": {"customer_id": seeded_customer["customer_id"]},
+        },
+    }
+
+    with patch(
+        "app.services.tool_executor.log_action", new_callable=AsyncMock
+    ) as mock_log_action:
+        await tool_executor._execute_single(tool_call)
+
+    tool_call_logs = [
+        call
+        for call in mock_log_action.await_args_list
+        if call.args[3] == AUDIT_TOOL_CALL
+    ]
+    assert len(tool_call_logs) == 2
+
+    started = tool_call_logs[0].kwargs["new_value"]
+    completed = tool_call_logs[1].kwargs["new_value"]
+    assert started["phase"] == "started"
+    assert started["tool_name"] == "query_churn_score"
+    assert started["args"]["customer_id"] == seeded_customer["customer_id"]
+    assert completed["phase"] == "completed"
+    assert completed["tool_name"] == "query_churn_score"
+    assert completed["status"] == "success"
+    assert isinstance(completed["latency_ms"], int)
+    assert tool_call_logs[0].args[1] == str(tool_executor.org_id)
+    assert tool_call_logs[0].args[2] == ACTOR_VAPI
+    assert tool_call_logs[0].kwargs["call_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_single_audit_redacts_pii_from_logged_args(tool_executor):
+    from app.services.audit_service import AUDIT_TOOL_CALL
+
+    tool_call = {
+        "id": "tc-audit-redact",
+        "function": {
+            "name": "unknown_tool_for_audit_redaction",
+            "arguments": {
+                "phone_primary": "+15551234567",
+                "full_name": "Jane Doe",
+            },
+        },
+    }
+
+    with patch(
+        "app.services.tool_executor.log_action", new_callable=AsyncMock
+    ) as mock_log_action:
+        await tool_executor._execute_single(tool_call)
+
+    started = next(
+        call.kwargs["new_value"]
+        for call in mock_log_action.await_args_list
+        if call.args[3] == AUDIT_TOOL_CALL and call.kwargs["new_value"]["phase"] == "started"
+    )
+    assert started["args"]["phone_primary"] == "[REDACTED]"
+    assert started["args"]["full_name"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_execute_single_audit_logging_failure_does_not_break_tool(
+    tool_executor, seeded_customer
+):
+    tool_call = {
+        "id": "tc-audit-fail",
+        "function": {
+            "name": "query_churn_score",
+            "arguments": {"customer_id": seeded_customer["customer_id"]},
+        },
+    }
+
+    with patch(
+        "app.services.tool_executor.log_action",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("audit db down"),
+    ):
+        result = await tool_executor._execute_single(tool_call)
+
+    assert result["toolCallId"] == "tc-audit-fail"
+    payload = json.loads(result["result"])
+    assert "churn_probability" in payload
