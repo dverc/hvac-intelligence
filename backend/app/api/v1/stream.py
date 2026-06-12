@@ -35,20 +35,29 @@ async def _consume_sse_token(token: str) -> str | None:
     return str(org_id)
 
 
-async def _stream_authorized(request: Request) -> bool:
+async def _resolve_stream_org_id(request: Request) -> str | None:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header.removeprefix("Bearer ").strip()
-        if verify_access_token(token):
-            return True
+        payload = verify_access_token(token)
+        if payload:
+            org_id = payload.get("org_id")
+            return str(org_id) if org_id else None
 
     query_token = request.query_params.get("token")
     if query_token:
-        org_id = await _consume_sse_token(query_token)
-        if org_id is not None:
-            return True
+        return await _consume_sse_token(query_token)
 
-    return False
+    return None
+
+
+def _event_belongs_to_org(event: dict, stream_org_id: str) -> bool:
+    if event.get("event_type") == "STREAM_ERROR":
+        return True
+    event_org_id = event.get("org_id")
+    if event_org_id is None:
+        return False
+    return str(event_org_id) == stream_org_id
 
 
 @router.post("/sse-token")
@@ -77,7 +86,8 @@ async def stream_churn_events(request: Request) -> StreamingResponse:
     Subscribes to Redis pub/sub channels: call.active, churn.intervention, batch.complete.
     Emits comment keepalives every 15s so idle connections survive ≥60s.
     """
-    if not await _stream_authorized(request):
+    stream_org_id = await _resolve_stream_org_id(request)
+    if stream_org_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized",
@@ -114,6 +124,9 @@ async def stream_churn_events(request: Request) -> StreamingResponse:
                 if event is None:
                     yield f"data: {json.dumps({'event_type': 'STREAM_ERROR', 'message': 'redis disconnected'})}\n\n"
                     await asyncio.sleep(SSE_PING_INTERVAL_SECONDS)
+                    continue
+
+                if not _event_belongs_to_org(event, stream_org_id):
                     continue
 
                 yield f"data: {json.dumps(event)}\n\n"

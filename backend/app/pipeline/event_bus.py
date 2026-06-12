@@ -62,6 +62,7 @@ async def publish_event(channel: str, event: dict[str, Any]) -> None:
 
 async def publish_call_active_event(
     *,
+    org_id: str,
     call_id: str,
     customer_id: str,
     customer_name: str,
@@ -74,6 +75,7 @@ async def publish_call_active_event(
 ) -> None:
     event = {
         "event_type": "CALL_ACTIVE",
+        "org_id": org_id,
         "call_id": call_id,
         "customer_id": customer_id,
         "customer_name": customer_name,

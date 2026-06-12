@@ -338,6 +338,7 @@ def _emit_intervention_complete(
 
     publish_intervention_complete_sync(
         {
+            "org_id": str(customer.org_id) if customer else None,
             "call_id": call_id,
             "customer_id": customer_id,
             "customer_name": customer.full_name if customer else "Unknown",

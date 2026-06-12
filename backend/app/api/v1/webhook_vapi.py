@@ -315,6 +315,7 @@ async def handle_vapi_webhook(
                         )
                         if score.get("risk_tier") in ("HIGH", "CRITICAL"):
                             await publish_call_active_event(
+                                org_id=str(call_start_org_id),
                                 call_id=str(call_id),
                                 customer_id=str(customer.customer_id),
                                 customer_name=customer.full_name,
