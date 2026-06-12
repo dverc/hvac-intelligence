@@ -164,4 +164,5 @@ async def test_completed_dispatch_jobs_sorted_by_completion_date(
     job_numbers = [item["job_number"] for item in response.json()["items"]]
     assert job_newer in job_numbers, job_numbers
     assert job_older in job_numbers, job_numbers
-    assert job_numbers.index(job_newer) < job_numbers.index(job_older)
+    filtered = [number for number in job_numbers if number in (job_newer, job_older)]
+    assert filtered == [job_newer, job_older]

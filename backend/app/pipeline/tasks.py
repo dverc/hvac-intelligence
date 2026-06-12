@@ -90,6 +90,7 @@ _RESCORE_CHUNK_RETRY = dict(
 
 _INTERVENTION_SUCCESS_OUTCOMES = frozenset({"DISPATCHED", "FAQ_RESOLVED"})
 _HIGH_RISK_TIERS = frozenset({"HIGH", "CRITICAL"})
+# Minimum post-call score drop to label an AI intervention as successful ground truth.
 _GROUND_TRUTH_SCORE_DROP_MINIMUM = 0.10
 
 
@@ -500,6 +501,7 @@ def check_model_drift_and_retrain(self) -> dict[str, Any]:
         session.close()
 
 
+# Parallel Celery chunk size — balances worker throughput vs. per-task DB session overhead.
 _RESCORE_CHUNK_SIZE = 50
 
 

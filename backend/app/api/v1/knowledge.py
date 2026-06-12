@@ -62,7 +62,10 @@ async def upload_document(
             chunking_strategy=chunking_strategy,
         )
     except RagInjectionError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "RAG_INJECTION_DETECTED", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

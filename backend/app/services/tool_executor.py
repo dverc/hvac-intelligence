@@ -97,8 +97,8 @@ async def _load_rag_chunks_from_cache(call_id: str) -> list[dict[str, Any]]:
 async def _append_rag_chunks_to_cache(
     call_id: str,
     entries: list[dict[str, Any]],
-) -> None:
-    await cache_rpush_json_items(
+) -> bool:
+    return await cache_rpush_json_items(
         rag_chunks_cache_key(call_id),
         entries,
         RAG_CHUNKS_CACHE_TTL,
@@ -221,15 +221,41 @@ def _is_unresolved_template(value: Any) -> bool:
     return isinstance(value, str) and value.strip().startswith("{{")
 
 
-_REDACT_KEYWORDS = ("phone", "number", "mobile", "email", "address", "name", "full_name")
+_REDACT_EXACT_KEYS = frozenset(
+    {"customer_id", "lookup_value", "email", "address", "service_address"}
+)
+_REDACT_KEYWORDS = (
+    "phone",
+    "number",
+    "mobile",
+    "email",
+    "address",
+    "service_address",
+    "name",
+    "full_name",
+)
+
+
+def _should_redact_arg_key(key: str) -> bool:
+    key_lower = key.lower()
+    if key_lower in _REDACT_EXACT_KEYS:
+        return True
+    return any(keyword in key_lower for keyword in _REDACT_KEYWORDS)
 
 
 def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
-    redacted = dict(args)
-    for key in redacted:
-        key_lower = key.lower()
-        if any(keyword in key_lower for keyword in _REDACT_KEYWORDS):
+    redacted: dict[str, Any] = {}
+    for key, value in args.items():
+        if _should_redact_arg_key(key):
             redacted[key] = "[REDACTED]"
+        elif isinstance(value, dict):
+            redacted[key] = _redact_args(value)
+        elif isinstance(value, list):
+            redacted[key] = [
+                _redact_args(item) if isinstance(item, dict) else item for item in value
+            ]
+        else:
+            redacted[key] = value
     return redacted
 
 
@@ -346,10 +372,15 @@ class ToolExecutor:
             entries = [_build_rag_chunk_metadata(chunk) for chunk in chunks]
             self._rag_chunks_accumulator.extend(entries)
             call_id = get_call_id()
+            tracked_count = 0
             if call_id:
-                await _append_rag_chunks_to_cache(call_id, entries)
-            org_label = str(self.org_id) if self.org_id is not None else "unknown"
-            rag_chunks_retrieved_total.labels(org_id=org_label).inc(len(entries))
+                if await _append_rag_chunks_to_cache(call_id, entries):
+                    tracked_count = len(entries)
+            else:
+                tracked_count = len(entries)
+            if tracked_count:
+                org_label = str(self.org_id) if self.org_id is not None else "unknown"
+                rag_chunks_retrieved_total.labels(org_id=org_label).inc(tracked_count)
         except Exception:
             logger.exception(
                 "RAG chunk tracking failed | org_id=%s call_id=%s",

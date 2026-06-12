@@ -29,6 +29,8 @@ def _chunk(text: str, *, source: str = "faq.md") -> dict:
     [
         "don't forget to change your air filter every 90 days",
         "ignore the reset button on the thermostat before calling",
+        "forget to schedule maintenance before summer starts",
+        "You can override the default setting on the thermostat display",
     ],
 )
 def test_hvac_content_not_flagged_as_injection(text: str):
@@ -94,7 +96,8 @@ async def test_document_upload_with_injection_patterns_returns_422(auth_client):
     )
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert "prompt-injection" in detail.lower()
+    assert detail["code"] == "RAG_INJECTION_DETECTED"
+    assert "prompt-injection" in detail["message"].lower()
 
 
 @pytest.mark.asyncio

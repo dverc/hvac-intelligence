@@ -11,6 +11,7 @@ from app.pipeline.tasks import (
     _chunk_customer_ids,
     _dispatch_parallel_org_rescore,
     batch_rescore_customers,
+    on_batch_rescore_complete,
     rescore_customers_chunk,
 )
 
@@ -126,3 +127,70 @@ def test_batch_rescore_customers_dispatches_chunks_for_large_org(monkeypatch):
     assert result["status"] == "ok"
     assert result["mode"] == "parallel"
     assert result["orgs"][0]["chunks"] == 3
+
+
+def test_on_batch_rescore_complete_aggregates_scored_counts(
+    sync_db_session, monkeypatch
+):
+    org_id = str(SEED_ORG_ID)
+    publish_mock = MagicMock(
+        return_value={
+            "org_id": org_id,
+            "accounts_scored": 75,
+            "scoring_errors": 3,
+            "new_critical": 0,
+            "resolved_critical": 0,
+        }
+    )
+    monkeypatch.setattr("app.pipeline.tasks.get_sync_session", lambda: sync_db_session)
+    monkeypatch.setattr("app.pipeline.tasks._publish_org_rescore_complete", publish_mock)
+
+    chunk_results = [
+        {"status": "ok", "accounts_scored": 40, "scoring_errors": 2},
+        {"status": "ok", "accounts_scored": 35, "scoring_errors": 1},
+    ]
+    result = on_batch_rescore_complete.run(chunk_results, org_id, critical_before=2)
+
+    assert result["accounts_scored"] == 75
+    assert result["scoring_errors"] == 3
+    assert result["failed_chunks"] == 0
+    publish_mock.assert_called_once_with(
+        sync_db_session,
+        org_id,
+        accounts_scored=75,
+        scoring_errors=3,
+        critical_before=2,
+    )
+
+
+def test_on_batch_rescore_complete_sums_successful_chunks_when_one_fails(
+    sync_db_session, monkeypatch
+):
+    org_id = str(SEED_ORG_ID)
+    monkeypatch.setattr("app.pipeline.tasks.get_sync_session", lambda: sync_db_session)
+    monkeypatch.setattr(
+        "app.pipeline.tasks._publish_org_rescore_complete",
+        lambda *args, **kwargs: {
+            "org_id": org_id,
+            "accounts_scored": kwargs["accounts_scored"],
+            "scoring_errors": kwargs["scoring_errors"],
+            "new_critical": 0,
+            "resolved_critical": 0,
+        },
+    )
+
+    chunk_results = [
+        {"status": "ok", "accounts_scored": 50, "scoring_errors": 0},
+        {
+            "status": "error",
+            "accounts_scored": 0,
+            "scoring_errors": 50,
+            "reason": "permanent_failure",
+        },
+    ]
+    result = on_batch_rescore_complete.run(chunk_results, org_id, critical_before=0)
+
+    assert result["accounts_scored"] == 50
+    assert result["scoring_errors"] == 50
+    assert result["failed_chunks"] == 1
+    assert result["status"] == "ok"

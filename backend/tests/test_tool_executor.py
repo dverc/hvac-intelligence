@@ -133,6 +133,46 @@ async def test_execute_batch_parses_stringified_function_arguments(
 
 
 @pytest.mark.asyncio
+async def test_execute_batch_uses_isolated_session_per_tool_call(
+    tool_executor, seeded_customer
+):
+    tool_call_list = [
+        {
+            "id": "tc-batch-1",
+            "type": "function",
+            "function": {
+                "name": "query_churn_score",
+                "arguments": {"customer_id": seeded_customer["customer_id"]},
+            },
+        },
+        {
+            "id": "tc-batch-2",
+            "type": "function",
+            "function": {
+                "name": "get_customer_info",
+                "arguments": {
+                    "lookup_method": "phone",
+                    "lookup_value": seeded_customer["phone"],
+                },
+            },
+        },
+    ]
+    session_ids: list[int] = []
+    original_clone = tool_executor._clone_for_session
+
+    def _tracking_clone(session):
+        session_ids.append(id(session))
+        return original_clone(session)
+
+    with patch.object(tool_executor, "_clone_for_session", side_effect=_tracking_clone):
+        results = await tool_executor.execute_batch(tool_call_list)
+
+    assert len(session_ids) == 2
+    assert session_ids[0] != session_ids[1]
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
 async def test_schedule_dispatch_picks_elena_when_name_in_preferred_window(
     tool_executor, seeded_customer, marcus_and_elena_technicians, db_session
 ):
@@ -626,7 +666,7 @@ async def test_execute_single_logs_tool_call_audit_before_and_after(
     completed = tool_call_logs[1].kwargs["new_value"]
     assert started["phase"] == "started"
     assert started["tool_name"] == "query_churn_score"
-    assert started["args"]["customer_id"] == seeded_customer["customer_id"]
+    assert started["args"]["customer_id"] == "[REDACTED]"
     assert completed["phase"] == "completed"
     assert completed["tool_name"] == "query_churn_score"
     assert completed["status"] == "success"

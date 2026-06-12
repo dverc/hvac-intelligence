@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 CUSTOMER_CACHE_TTL = 300
 ORG_CACHE_TTL = 900
+# 24 hours — covers a full call day plus buffer for late call-end webhooks.
 RAG_CHUNKS_CACHE_TTL = 86400
 
 _redis_client: Any | None = None
@@ -74,10 +75,10 @@ async def cache_rpush_json_items(
     key: str,
     items: list[dict[str, Any]],
     ttl_seconds: int,
-) -> None:
+) -> bool:
     """Atomically append JSON objects to a Redis list (safe for concurrent writers)."""
     if not items:
-        return
+        return True
     try:
         client = get_redis_client()
         key_type = await client.type(key)
@@ -96,8 +97,10 @@ async def cache_rpush_json_items(
         for item in items:
             await client.rpush(key, json.dumps(item))
         await client.expire(key, ttl_seconds)
+        return True
     except Exception:
         logger.debug("cache_rpush_json_items failed for key=%s", key, exc_info=True)
+        return False
 
 
 async def cache_lrange_json_items(key: str) -> list[dict[str, Any]]:

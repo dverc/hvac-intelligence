@@ -15,6 +15,7 @@ from app.models.ground_truth_label import GroundTruthLabel
 
 logger = logging.getLogger(__name__)
 
+# Minimum labeled outcomes per org before auto-retrain (stable hold-out for small validation set).
 _GROUND_TRUTH_MINIMUM = 20
 
 
