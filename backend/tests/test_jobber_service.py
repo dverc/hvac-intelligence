@@ -448,3 +448,88 @@ async def test_create_client_returns_none_after_throttle_exhausted(
             result = await svc.create_client(SEED_ORG_ID, customer)
 
     assert result is None
+
+
+def _mock_jobber_sync_db_session(customer: Customer) -> tuple[MagicMock, AsyncMock]:
+    mock_session = AsyncMock()
+    mock_session.get = AsyncMock(return_value=customer)
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session_cm = MagicMock()
+    mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_factory = MagicMock(return_value=mock_session_cm)
+    return mock_factory, mock_session
+
+
+@pytest.mark.asyncio
+async def test_sync_new_customer_to_jobber_success():
+    from app.pipeline.tasks import _sync_new_customer_to_jobber_async
+
+    customer_id = uuid.uuid4()
+    customer = Customer(
+        org_id=SEED_ORG_ID,
+        external_id="VOICE-ABCD1234",
+        full_name="Jane Newcaller",
+        phone_primary="+15559998877",
+        customer_since=datetime.now(timezone.utc).date(),
+        account_status="ACTIVE",
+        contract_type="RESIDENTIAL_OTC",
+    )
+    customer.customer_id = customer_id
+    mock_factory, mock_session = _mock_jobber_sync_db_session(customer)
+
+    with (
+        patch(
+            "app.core.database.get_session_factory",
+            return_value=mock_factory,
+        ),
+        patch.object(
+            JobberService, "create_client", new_callable=AsyncMock
+        ) as mock_create,
+    ):
+        mock_create.return_value = "jobber-client-async"
+        result = await _sync_new_customer_to_jobber_async(
+            str(SEED_ORG_ID), str(customer_id)
+        )
+
+    assert result["status"] == "ok"
+    assert result["jobber_client_id"] == "jobber-client-async"
+    assert customer.external_id == "jobber:jobber-client-async"
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sync_new_customer_to_jobber_skipped_when_jobber_returns_none():
+    from app.pipeline.tasks import _sync_new_customer_to_jobber_async
+
+    customer_id = uuid.uuid4()
+    customer = Customer(
+        org_id=SEED_ORG_ID,
+        external_id="VOICE-ABCD1234",
+        full_name="Jane Newcaller",
+        phone_primary="+15559998877",
+        customer_since=datetime.now(timezone.utc).date(),
+        account_status="ACTIVE",
+        contract_type="RESIDENTIAL_OTC",
+    )
+    customer.customer_id = customer_id
+    mock_factory, mock_session = _mock_jobber_sync_db_session(customer)
+
+    with (
+        patch(
+            "app.core.database.get_session_factory",
+            return_value=mock_factory,
+        ),
+        patch.object(
+            JobberService, "create_client", new_callable=AsyncMock
+        ) as mock_create,
+    ):
+        mock_create.return_value = None
+        result = await _sync_new_customer_to_jobber_async(
+            str(SEED_ORG_ID), str(customer_id)
+        )
+
+    assert result["status"] == "skipped"
+    assert customer.external_id == "VOICE-ABCD1234"
+    mock_session.commit.assert_not_awaited()

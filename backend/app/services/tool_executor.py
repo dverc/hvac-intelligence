@@ -49,7 +49,6 @@ from app.services.churn_service import ChurnService
 from app.services.customer_service import CustomerService, normalize_phone
 from app.services.dispatch_service import DispatchService
 from app.services.equipment_service import EquipmentService
-from app.services.jobber_service import JobberService, _jobber_external_id
 from app.services.service_area_service import is_address_serviceable
 from app.services.skill_routing_service import get_required_skill
 from app.services.service_catalog_service import (
@@ -755,22 +754,11 @@ class ToolExecutor:
                     },
                     call_id=get_call_id() or None,
                 )
-            customer = await self.customer_service.get_by_id(
-                uuid.UUID(result["customer_id"]), self.org_id
+            from app.pipeline.tasks import sync_new_customer_to_jobber
+
+            sync_new_customer_to_jobber.delay(
+                str(self.org_id), result["customer_id"]
             )
-            if customer is not None:
-                jobber = JobberService(self.db)
-                jobber_client_id = await jobber.create_client(self.org_id, customer)
-                if jobber_client_id:
-                    customer.external_id = _jobber_external_id(
-                        "jobber", jobber_client_id
-                    )
-                    await self.db.flush()
-                else:
-                    logger.warning(
-                        "Jobber clientCreate did not return a client id for customer %s",
-                        result["customer_id"],
-                    )
         return json.dumps(
             {
                 "status": "created",

@@ -646,6 +646,83 @@ async def _sync_jobber_data_async() -> dict[str, Any]:
     return {"status": "ok", "summaries": summaries}
 
 
+@celery_app.task(
+    name="app.pipeline.tasks.sync_new_customer_to_jobber",
+    bind=True,
+    max_retries=3,
+)
+def sync_new_customer_to_jobber(
+    self, org_id: str, customer_id: str
+) -> dict[str, Any]:
+    """Push a newly created customer to Jobber off the voice webhook path."""
+    logger.info(
+        "Task starting: sync_new_customer_to_jobber org=%s customer=%s attempt=%s",
+        org_id,
+        customer_id,
+        self.request.retries + 1,
+    )
+    try:
+        return asyncio.run(_sync_new_customer_to_jobber_async(org_id, customer_id))
+    except Exception:
+        logger.exception(
+            "sync_new_customer_to_jobber failed org=%s customer=%s",
+            org_id,
+            customer_id,
+        )
+        return {"status": "error", "customer_id": customer_id}
+
+
+async def _sync_new_customer_to_jobber_async(
+    org_id: str, customer_id: str
+) -> dict[str, Any]:
+    from app.core.database import get_session_factory
+    from app.services.jobber_service import JobberService, _jobber_external_id
+
+    org_uuid = uuid.UUID(org_id)
+    customer_uuid = uuid.UUID(customer_id)
+
+    async with get_session_factory()() as session:
+        try:
+            customer = await session.get(Customer, customer_uuid)
+            if customer is None or customer.org_id != org_uuid:
+                logger.warning(
+                    "sync_new_customer_to_jobber: customer %s not found for org %s",
+                    customer_id,
+                    org_id,
+                )
+                return {"status": "error", "reason": "customer_not_found"}
+
+            jobber = JobberService(session)
+            jobber_client_id = await jobber.create_client(org_uuid, customer)
+            if jobber_client_id:
+                customer.external_id = _jobber_external_id("jobber", jobber_client_id)
+                await session.commit()
+                logger.info(
+                    "Jobber clientCreate succeeded for customer %s -> %s",
+                    customer_id,
+                    jobber_client_id,
+                )
+                return {
+                    "status": "ok",
+                    "customer_id": customer_id,
+                    "jobber_client_id": jobber_client_id,
+                }
+
+            logger.warning(
+                "Jobber clientCreate returned no client id for customer %s",
+                customer_id,
+            )
+            return {"status": "skipped", "customer_id": customer_id}
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "sync_new_customer_to_jobber async failed org=%s customer=%s",
+                org_id,
+                customer_id,
+            )
+            return {"status": "error", "customer_id": customer_id}
+
+
 @celery_app.task(name="app.pipeline.tasks.send_booking_confirmation_sms", **_SMS_TASK_RETRY)
 def send_booking_confirmation_sms(self, job_id: str) -> dict[str, Any]:
     """Send the customer an SMS after a dispatch job is booked."""
