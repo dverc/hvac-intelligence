@@ -479,67 +479,291 @@ def check_model_drift_and_retrain(self) -> dict[str, Any]:
         session.close()
 
 
+_RESCORE_CHUNK_SIZE = 50
+
+
+def _group_active_customers_by_org(session) -> dict[str, list[str]]:
+    rows = session.execute(
+        select(Customer.org_id, Customer.customer_id).where(
+            Customer.account_status == "ACTIVE"
+        )
+    ).all()
+    grouped: dict[str, list[str]] = {}
+    for org_id, customer_id in rows:
+        grouped.setdefault(str(org_id), []).append(str(customer_id))
+    return grouped
+
+
+def _chunk_customer_ids(
+    customer_ids: list[str],
+    chunk_size: int = _RESCORE_CHUNK_SIZE,
+) -> list[list[str]]:
+    return [
+        customer_ids[index : index + chunk_size]
+        for index in range(0, len(customer_ids), chunk_size)
+    ]
+
+
+def _score_customers_in_session(
+    session,
+    customer_ids: list[uuid.UUID],
+) -> dict[str, int]:
+    builder = FeatureBuilder(session)
+    ensemble = get_churn_ensemble()
+    scored = 0
+    errors = 0
+
+    for customer_id in customer_ids:
+        try:
+            full_features = builder.build(
+                entity_id=customer_id, entity_type="CUSTOMER"
+            )
+            meta = full_features.pop("_meta", {})
+            model_input = FeatureBuilder.model_feature_dict(full_features)
+            _upsert_feature_store(session, meta, full_features, model_input)
+        except Exception as exc:
+            logger.warning(
+                "Feature store upsert failed for customer %s: %s",
+                customer_id,
+                exc,
+            )
+
+        result = score_customer_sync(
+            session,
+            customer_id,
+            trigger="BATCH_RESCORE",
+            ensemble=ensemble,
+        )
+        if result.get("status") in {"ok", "model_not_trained"}:
+            scored += 1
+        elif result.get("status") == "error":
+            errors += 1
+
+    return {"accounts_scored": scored, "scoring_errors": errors}
+
+
+def _publish_org_rescore_complete(
+    session,
+    org_id: str,
+    *,
+    accounts_scored: int,
+    scoring_errors: int,
+    critical_before: int,
+) -> dict[str, Any]:
+    org_uuid = uuid.UUID(org_id)
+    critical_after = _count_tier(session, "CRITICAL", org_id=org_uuid)
+    new_critical = max(0, critical_after - critical_before)
+    resolved_critical = max(0, critical_before - critical_after)
+    publish_batch_score_complete_sync(
+        accounts_scored=accounts_scored,
+        new_critical=new_critical,
+        resolved_critical=resolved_critical,
+    )
+    return {
+        "org_id": org_id,
+        "accounts_scored": accounts_scored,
+        "scoring_errors": scoring_errors,
+        "new_critical": new_critical,
+        "resolved_critical": resolved_critical,
+    }
+
+
+def _dispatch_parallel_org_rescore(
+    org_id: str,
+    customer_ids: list[str],
+    critical_before: int,
+) -> dict[str, Any]:
+    from celery import chord, group
+
+    chunks = _chunk_customer_ids(customer_ids)
+    workflow = chord(
+        group(rescore_customers_chunk.s(org_id, chunk) for chunk in chunks),
+        on_batch_rescore_complete.s(org_id, critical_before),
+    )
+    workflow.apply_async()
+    logger.info(
+        "Queued parallel batch rescore | org_id=%s customers=%s chunks=%s",
+        org_id,
+        len(customer_ids),
+        len(chunks),
+    )
+    return {
+        "org_id": org_id,
+        "mode": "parallel",
+        "customers": len(customer_ids),
+        "chunks": len(chunks),
+    }
+
+
+@celery_app.task(name="app.pipeline.tasks.rescore_customers_chunk", **_STANDARD_TASK_RETRY)
+def rescore_customers_chunk(
+    self,
+    org_id: str,
+    customer_ids: list[str],
+) -> dict[str, Any]:
+    """Score up to 50 customers in a single parallel chunk."""
+    logger.info(
+        "Task starting: rescore_customers_chunk org_id=%s customers=%s attempt=%s",
+        org_id,
+        len(customer_ids),
+        self.request.retries + 1,
+    )
+    session = get_sync_session()
+    try:
+        customer_uuids = [uuid.UUID(customer_id) for customer_id in customer_ids]
+        metrics = _score_customers_in_session(session, customer_uuids)
+        session.commit()
+        return {
+            "status": "ok",
+            "org_id": org_id,
+            "customer_count": len(customer_ids),
+            **metrics,
+        }
+    except Exception as exc:
+        session.rollback()
+        logger.exception(
+            "rescore_customers_chunk failed | org_id=%s customers=%s",
+            org_id,
+            len(customer_ids),
+        )
+        return {
+            "status": "error",
+            "org_id": org_id,
+            "customer_count": len(customer_ids),
+            "accounts_scored": 0,
+            "scoring_errors": len(customer_ids),
+            "reason": str(exc),
+        }
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.pipeline.tasks.on_batch_rescore_complete")
+def on_batch_rescore_complete(
+    results: list[dict[str, Any]],
+    org_id: str,
+    critical_before: int,
+) -> dict[str, Any]:
+    """Chord callback: aggregate chunk results and emit BATCH_SCORE_COMPLETE."""
+    session = get_sync_session()
+    try:
+        chunk_results = [result for result in results if result]
+        accounts_scored = sum(
+            int(result.get("accounts_scored", 0)) for result in chunk_results
+        )
+        scoring_errors = sum(
+            int(result.get("scoring_errors", 0)) for result in chunk_results
+        )
+        failed_chunks = sum(
+            1 for result in chunk_results if result.get("status") == "error"
+        )
+
+        summary = _publish_org_rescore_complete(
+            session,
+            org_id,
+            accounts_scored=accounts_scored,
+            scoring_errors=scoring_errors,
+            critical_before=critical_before,
+        )
+        logger.info(
+            "Batch rescore complete | org_id=%s accounts_scored=%s "
+            "scoring_errors=%s failed_chunks=%s",
+            org_id,
+            accounts_scored,
+            scoring_errors,
+            failed_chunks,
+        )
+        if failed_chunks:
+            logger.warning(
+                "Batch rescore had chunk failures | org_id=%s failed_chunks=%s",
+                org_id,
+                failed_chunks,
+            )
+        return {
+            "status": "ok",
+            "mode": "parallel",
+            "failed_chunks": failed_chunks,
+            **summary,
+        }
+    except Exception as exc:
+        session.rollback()
+        logger.exception(
+            "on_batch_rescore_complete failed | org_id=%s: %s",
+            org_id,
+            exc,
+        )
+        return {"status": "error", "org_id": org_id, "reason": str(exc)}
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.pipeline.tasks.batch_rescore_customers", **_STANDARD_TASK_RETRY)
 def batch_rescore_customers(self) -> dict[str, Any]:
-    """Batch re-score all active customers; emits BATCH_SCORE_COMPLETE on Redis."""
+    """Batch re-score active customers; large orgs fan out to parallel chunk tasks."""
     logger.info(
         "Task starting: batch_rescore_customers attempt=%s",
         self.request.retries + 1,
     )
     session = get_sync_session()
     try:
-        critical_before = _count_tier(session, "CRITICAL")
-        customer_ids = session.scalars(
-            select(Customer.customer_id).where(Customer.account_status == "ACTIVE")
-        ).all()
+        customers_by_org = _group_active_customers_by_org(session)
+        if not customers_by_org:
+            return {"status": "ok", "accounts_scored": 0, "scoring_errors": 0}
 
-        builder = FeatureBuilder(session)
-        ensemble = get_churn_ensemble()
-        scored = 0
-        errors = 0
+        inline_orgs: list[dict[str, Any]] = []
+        parallel_orgs: list[dict[str, Any]] = []
 
-        for customer_id in customer_ids:
-            try:
-                full_features = builder.build(
-                    entity_id=customer_id, entity_type="CUSTOMER"
+        for org_id, customer_ids in customers_by_org.items():
+            org_uuid = uuid.UUID(org_id)
+            critical_before = _count_tier(session, "CRITICAL", org_id=org_uuid)
+
+            if len(customer_ids) < _RESCORE_CHUNK_SIZE:
+                metrics = _score_customers_in_session(
+                    session,
+                    [uuid.UUID(customer_id) for customer_id in customer_ids],
                 )
-                meta = full_features.pop("_meta", {})
-                model_input = FeatureBuilder.model_feature_dict(full_features)
-                _upsert_feature_store(session, meta, full_features, model_input)
-            except Exception as exc:
-                logger.warning(
-                    "Feature store upsert failed for customer %s: %s",
-                    customer_id,
-                    exc,
+                session.commit()
+                inline_orgs.append(
+                    _publish_org_rescore_complete(
+                        session,
+                        org_id,
+                        accounts_scored=metrics["accounts_scored"],
+                        scoring_errors=metrics["scoring_errors"],
+                        critical_before=critical_before,
+                    )
+                )
+                logger.info(
+                    "Inline batch rescore complete | org_id=%s customers=%s",
+                    org_id,
+                    len(customer_ids),
+                )
+            else:
+                parallel_orgs.append(
+                    _dispatch_parallel_org_rescore(
+                        org_id,
+                        customer_ids,
+                        critical_before,
+                    )
                 )
 
-            result = score_customer_sync(
-                session,
-                customer_id,
-                trigger="BATCH_RESCORE",
-                ensemble=ensemble,
-            )
-            if result.get("status") in {"ok", "model_not_trained"}:
-                scored += 1
-            elif result.get("status") == "error":
-                errors += 1
+        if parallel_orgs and not inline_orgs:
+            return {"status": "ok", "mode": "parallel", "orgs": parallel_orgs}
 
-        session.commit()
-        critical_after = _count_tier(session, "CRITICAL")
-
-        publish_batch_score_complete_sync(
-            accounts_scored=scored,
-            new_critical=max(0, critical_after - critical_before),
-            resolved_critical=max(0, critical_before - critical_after),
-        )
-
-        return {
+        total_scored = sum(org["accounts_scored"] for org in inline_orgs)
+        total_errors = sum(org["scoring_errors"] for org in inline_orgs)
+        result: dict[str, Any] = {
             "status": "ok",
-            "accounts_scored": scored,
-            "scoring_errors": errors,
-            "new_critical": max(0, critical_after - critical_before),
-            "resolved_critical": max(0, critical_before - critical_after),
+            "accounts_scored": total_scored,
+            "scoring_errors": total_errors,
         }
+        if inline_orgs:
+            result["inline_orgs"] = inline_orgs
+        if parallel_orgs:
+            result["mode"] = "mixed" if inline_orgs else "parallel"
+            result["parallel_orgs"] = parallel_orgs
+        elif inline_orgs:
+            result["mode"] = "inline"
+        return result
     except Exception as exc:
         session.rollback()
         logger.exception("batch_rescore_customers failed: %s", exc)
@@ -548,21 +772,31 @@ def batch_rescore_customers(self) -> dict[str, Any]:
         session.close()
 
 
-def _count_tier(session, tier: str) -> int:
+def _count_tier(
+    session,
+    tier: str,
+    *,
+    org_id: uuid.UUID | None = None,
+) -> int:
     """Count customers at tier using latest churn_scores or metadata fallback."""
     from app.services.churn_service import TIER_DEFAULT_PROBABILITY
 
+    churn_query = select(ChurnScore).where(
+        ChurnScore.entity_type == "CUSTOMER",
+        ChurnScore.risk_tier == tier,
+    )
+    if org_id is not None:
+        churn_query = churn_query.where(ChurnScore.org_id == org_id)
     rows = session.scalars(
-        select(ChurnScore)
-        .where(ChurnScore.entity_type == "CUSTOMER", ChurnScore.risk_tier == tier)
-        .order_by(ChurnScore.score_timestamp.desc())
+        churn_query.order_by(ChurnScore.score_timestamp.desc())
     ).all()
     if rows:
         return len({row.entity_id for row in rows})
 
-    customers = session.scalars(
-        select(Customer).where(Customer.account_status == "ACTIVE")
-    ).all()
+    customer_query = select(Customer).where(Customer.account_status == "ACTIVE")
+    if org_id is not None:
+        customer_query = customer_query.where(Customer.org_id == org_id)
+    customers = session.scalars(customer_query).all()
     count = 0
     for customer in customers:
         meta = customer.metadata_ or {}

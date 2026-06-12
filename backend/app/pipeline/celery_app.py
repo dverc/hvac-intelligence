@@ -25,6 +25,7 @@ celery_app.conf.update(
     enable_utc=True,
     task_routes={
         "app.pipeline.tasks.process_call_features": {"queue": "features"},
+        "app.pipeline.tasks.rescore_customers_chunk": {"queue": "scoring"},
     },
     imports=("app.pipeline.tasks", "app.tasks.celery_tasks"),
     beat_schedule={
