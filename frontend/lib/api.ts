@@ -1060,15 +1060,30 @@ export function getDriveStatus(orgId: string) {
 
 // ── SSE (dashboard real-time) ───────────────────────────────────────────────
 
-/** URL for EventSource — not a JSON fetch. Auth via JWT query param (SSE cannot set headers). */
-export function getChurnEventsStreamUrl() {
-  const url = new URL(`${getApiBaseUrl()}/api/v1/stream/churn-events`);
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("hvac_token");
-    if (token) {
-      url.searchParams.set("token", token);
+/** One-time short-lived token for EventSource (SSE cannot set auth headers). */
+export async function fetchChurnEventsSseToken(): Promise<string | null> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}/api/v1/stream/sse-token`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { Accept: "application/json", ...authenticatedHeaders() },
+    });
+    if (!response.ok) {
+      console.error("[SSE] Failed to fetch stream token:", response.status);
+      return null;
     }
+    const data = (await response.json()) as { token: string };
+    return data.token;
+  } catch (err) {
+    console.error("[SSE] Failed to fetch stream token:", err);
+    return null;
   }
+}
+
+/** URL for EventSource — uses a one-time SSE token from `fetchChurnEventsSseToken`. */
+export function getChurnEventsStreamUrl(sseToken: string) {
+  const url = new URL(`${getApiBaseUrl()}/api/v1/stream/churn-events`);
+  url.searchParams.set("token", sseToken);
   return url.toString();
 }
 

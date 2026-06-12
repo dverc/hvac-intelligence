@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.core.auth_jwt import verify_access_token
-from app.core.config import get_settings
+from app.core.auth import verify_api_key
+from app.core.auth_jwt import get_current_user, verify_access_token
+from app.core.cache import get_redis_client
 from app.pipeline.event_bus import ALL_SSE_CHANNELS, EventBus
 
 logger = logging.getLogger(__name__)
@@ -16,10 +18,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stream", tags=["stream"])
 
 SSE_PING_INTERVAL_SECONDS = 15.0
+SSE_TOKEN_TTL_SECONDS = 60
+SSE_TOKEN_KEY_PREFIX = "sse_token:"
 
 
-def _stream_authorized(request: Request) -> bool:
-    settings = get_settings()
+def _sse_token_key(token: str) -> str:
+    return f"{SSE_TOKEN_KEY_PREFIX}{token}"
+
+
+async def _consume_sse_token(token: str) -> str | None:
+    """Validate a one-time SSE token and return the bound org_id."""
+    redis = get_redis_client()
+    org_id = await redis.getdel(_sse_token_key(token))
+    if org_id is None:
+        return None
+    return str(org_id)
+
+
+async def _stream_authorized(request: Request) -> bool:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header.removeprefix("Bearer ").strip()
@@ -27,11 +43,31 @@ def _stream_authorized(request: Request) -> bool:
             return True
 
     query_token = request.query_params.get("token")
-    if query_token and verify_access_token(query_token):
-        return True
+    if query_token:
+        org_id = await _consume_sse_token(query_token)
+        if org_id is not None:
+            return True
 
-    api_key = request.query_params.get("api_key") or request.headers.get("X-API-Key")
-    return bool(api_key and api_key == settings.DASHBOARD_API_KEY)
+    return False
+
+
+@router.post("/sse-token")
+async def create_sse_token(
+    current_user: dict = Depends(get_current_user),
+    _: None = Depends(verify_api_key),
+) -> dict[str, str]:
+    """Issue a short-lived one-time token for EventSource (cannot send auth headers)."""
+    org_id = current_user.get("org_id")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+        )
+
+    token = secrets.token_urlsafe(32)
+    redis = get_redis_client()
+    await redis.set(_sse_token_key(token), str(org_id), ex=SSE_TOKEN_TTL_SECONDS)
+    return {"token": token}
 
 
 @router.get("/churn-events")
@@ -41,7 +77,7 @@ async def stream_churn_events(request: Request) -> StreamingResponse:
     Subscribes to Redis pub/sub channels: call.active, churn.intervention, batch.complete.
     Emits comment keepalives every 15s so idle connections survive ≥60s.
     """
-    if not _stream_authorized(request):
+    if not await _stream_authorized(request):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized",
