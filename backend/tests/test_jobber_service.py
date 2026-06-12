@@ -334,3 +334,117 @@ async def test_create_job_in_jobber_returns_none_on_failure(
         result = await svc.create_job_in_jobber(SEED_ORG_ID, job, customer, tech)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_create_client_success(db_session, encryption_key):
+    token = JobberToken(
+        org_id=SEED_ORG_ID,
+        access_token=encrypt_token("tok") or "",
+        refresh_token=encrypt_token("ref") or "",
+        is_active=True,
+    )
+    db_session.add(token)
+    await db_session.flush()
+
+    customer = Customer(
+        org_id=SEED_ORG_ID,
+        external_id="VOICE-ABCD1234",
+        full_name="Jane Newcaller",
+        phone_primary="+15559998877",
+        email="jane@example.com",
+        address_line1="123 Main St",
+        city="Irvine",
+        state="CA",
+        zip="92618",
+        customer_since=datetime.now(timezone.utc).date(),
+        account_status="ACTIVE",
+        contract_type="RESIDENTIAL_OTC",
+    )
+    db_session.add(customer)
+    await db_session.flush()
+
+    captured_body: dict = {}
+
+    async def mock_post(self, url, **kwargs):
+        captured_body.update(kwargs.get("json") or {})
+        return _httpx_json_response(
+            url,
+            {
+                "data": {
+                    "clientCreate": {
+                        "client": {"id": "jobber-client-new"},
+                        "userErrors": [],
+                    }
+                }
+            },
+        )
+
+    with patch.object(httpx.AsyncClient, "post", mock_post):
+        svc = JobberService(db_session)
+        jobber_client_id = await svc.create_client(SEED_ORG_ID, customer)
+
+    assert jobber_client_id == "jobber-client-new"
+    client_input = captured_body["variables"]["input"]
+    assert client_input["firstName"] == "Jane"
+    assert client_input["lastName"] == "Newcaller"
+    assert client_input["phones"][0]["number"] == "+15559998877"
+    assert client_input["emails"][0]["address"] == "jane@example.com"
+    assert client_input["billingAddress"]["street1"] == "123 Main St"
+    assert client_input["billingAddress"]["province"] == "CA"
+
+
+@pytest.mark.asyncio
+async def test_create_client_returns_none_when_not_connected(db_session, encryption_key):
+    customer = Customer(
+        org_id=SEED_ORG_ID,
+        external_id="VOICE-ABCD1234",
+        full_name="Jane Newcaller",
+        phone_primary="+15559998877",
+        customer_since=datetime.now(timezone.utc).date(),
+        account_status="ACTIVE",
+        contract_type="RESIDENTIAL_OTC",
+    )
+    db_session.add(customer)
+    await db_session.flush()
+
+    svc = JobberService(db_session)
+    assert await svc.create_client(SEED_ORG_ID, customer) is None
+
+
+@pytest.mark.asyncio
+async def test_create_client_returns_none_after_throttle_exhausted(
+    db_session, encryption_key
+):
+    token = JobberToken(
+        org_id=SEED_ORG_ID,
+        access_token=encrypt_token("tok") or "",
+        refresh_token=encrypt_token("ref") or "",
+        is_active=True,
+    )
+    db_session.add(token)
+    await db_session.flush()
+
+    customer = Customer(
+        org_id=SEED_ORG_ID,
+        external_id="VOICE-ABCD1234",
+        full_name="Jane Newcaller",
+        phone_primary="+15559998877",
+        customer_since=datetime.now(timezone.utc).date(),
+        account_status="ACTIVE",
+        contract_type="RESIDENTIAL_OTC",
+    )
+    db_session.add(customer)
+    await db_session.flush()
+
+    throttle_payload = {"errors": [{"message": "THROTTLED"}]}
+
+    async def mock_post(self, url, **kwargs):
+        return _httpx_json_response(url, throttle_payload)
+
+    with patch.object(httpx.AsyncClient, "post", mock_post):
+        with patch("app.services.jobber_service.asyncio.sleep", new_callable=AsyncMock):
+            svc = JobberService(db_session)
+            result = await svc.create_client(SEED_ORG_ID, customer)
+
+    assert result is None

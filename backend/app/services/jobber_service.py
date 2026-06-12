@@ -107,6 +107,17 @@ mutation CreateJob($input: JobCreateInput!) {
 }
 """
 
+CREATE_CLIENT_MUTATION = """
+mutation CreateClient($input: ClientCreateInput!) {
+  clientCreate(input: $input) {
+    client {
+      id
+    }
+    userErrors { message path }
+  }
+}
+"""
+
 _JOBBER_CANCELLED = frozenset(
     {"cancelled", "canceled", "archived", "closed", "completed"}
 )
@@ -152,6 +163,15 @@ def _parse_jobber_external_id(external_id: str | None, prefix: str) -> str | Non
     if external_id.startswith(needle):
         return external_id[len(needle) :]
     return None
+
+
+def _split_client_name(full_name: str) -> tuple[str, str]:
+    parts = full_name.strip().split()
+    if not parts:
+        return "Customer", "."
+    if len(parts) == 1:
+        return parts[0], "."
+    return parts[0], " ".join(parts[1:])
 
 
 class JobberService:
@@ -430,6 +450,72 @@ class JobberService:
         if first or last:
             return f"{first} {last}".strip()
         return str(client.get("name") or "Jobber Client")
+
+    def _build_client_create_input(self, customer: Customer) -> dict[str, Any]:
+        first_name, last_name = _split_client_name(customer.full_name)
+        client_input: dict[str, Any] = {
+            "firstName": first_name,
+            "lastName": last_name,
+            "phones": [
+                {
+                    "number": customer.phone_primary,
+                    "primary": True,
+                    "description": "MAIN",
+                }
+            ],
+        }
+        if customer.email:
+            client_input["emails"] = [
+                {
+                    "address": customer.email,
+                    "primary": True,
+                    "description": "MAIN",
+                }
+            ]
+        billing_address: dict[str, str] = {}
+        if customer.address_line1:
+            billing_address["street1"] = customer.address_line1
+        if customer.address_line2:
+            billing_address["street2"] = customer.address_line2
+        if customer.city:
+            billing_address["city"] = customer.city
+        if customer.state:
+            billing_address["province"] = customer.state
+        if customer.zip:
+            billing_address["postalCode"] = customer.zip
+        if billing_address:
+            client_input["billingAddress"] = billing_address
+        return client_input
+
+    async def create_client(
+        self, org_id: uuid.UUID, customer: Customer
+    ) -> str | None:
+        if not await self.has_active_connection(org_id):
+            return None
+
+        try:
+            payload = await self.graphql_query(
+                org_id,
+                CREATE_CLIENT_MUTATION,
+                {"input": self._build_client_create_input(customer)},
+            )
+            result = (payload.get("data") or {}).get("clientCreate") or {}
+            errors = result.get("userErrors") or []
+            if errors:
+                logger.error("Jobber clientCreate userErrors: %s", errors)
+                return None
+            client = result.get("client") or {}
+            jobber_client_id = client.get("id")
+            if not jobber_client_id:
+                return None
+            return str(jobber_client_id)
+        except Exception as exc:
+            logger.exception(
+                "Jobber client creation failed for customer %s: %s",
+                customer.customer_id,
+                exc,
+            )
+            return None
 
     async def sync_clients_to_customers(self, org_id: uuid.UUID) -> int:
         synced = 0
