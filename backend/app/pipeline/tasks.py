@@ -78,6 +78,16 @@ _SMS_TASK_RETRY = dict(
     retry_jitter=True,
 )
 
+_RESCORE_CHUNK_RETRY = dict(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    autoretry_for=_TRANSIENT_EXCEPTIONS,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+)
+
 _INTERVENTION_SUCCESS_OUTCOMES = frozenset({"DISPATCHED", "FAQ_RESOLVED"})
 _HIGH_RISK_TIERS = frozenset({"HIGH", "CRITICAL"})
 _GROUND_TRUTH_SCORE_DROP_MINIMUM = 0.10
@@ -103,16 +113,7 @@ def _maybe_record_call_outcome_ground_truth(
         return None
 
     customer_uuid = uuid.UUID(str(customer_id))
-    if call_id:
-        existing = session.execute(
-            select(GroundTruthLabel.label_id).where(
-                GroundTruthLabel.customer_id == customer_uuid,
-                GroundTruthLabel.notes.isnot(None),
-                GroundTruthLabel.notes.contains(f"call_id={call_id}"),
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            return None
+    source_call_id = str(call_id) if call_id else None
 
     churned: bool | None = None
     notes: str | None = None
@@ -140,6 +141,8 @@ def _maybe_record_call_outcome_ground_truth(
     else:
         return None
 
+    from sqlalchemy.exc import IntegrityError
+
     from app.ml.ground_truth import record_churn_event_sync
 
     try:
@@ -148,6 +151,7 @@ def _maybe_record_call_outcome_ground_truth(
             churned,
             session,
             notes=notes,
+            source_call_id=source_call_id,
         )
         logger.info(
             "Ground-truth label created from call outcome | customer_id=%s "
@@ -161,6 +165,14 @@ def _maybe_record_call_outcome_ground_truth(
             "churned": churned,
             "call_outcome": call_outcome,
         }
+    except IntegrityError:
+        session.rollback()
+        logger.info(
+            "Duplicate ground-truth label skipped | customer_id=%s call_id=%s",
+            customer_id,
+            call_id,
+        )
+        return None
     except Exception:
         logger.exception(
             "Failed to record ground-truth label | customer_id=%s call_id=%s",
@@ -604,7 +616,7 @@ def _dispatch_parallel_org_rescore(
     }
 
 
-@celery_app.task(name="app.pipeline.tasks.rescore_customers_chunk", **_STANDARD_TASK_RETRY)
+@celery_app.task(name="app.pipeline.tasks.rescore_customers_chunk", **_RESCORE_CHUNK_RETRY)
 def rescore_customers_chunk(
     self,
     org_id: str,
@@ -628,12 +640,22 @@ def rescore_customers_chunk(
             "customer_count": len(customer_ids),
             **metrics,
         }
-    except Exception as exc:
+    except _TRANSIENT_EXCEPTIONS:
         session.rollback()
         logger.exception(
-            "rescore_customers_chunk failed | org_id=%s customers=%s",
+            "rescore_customers_chunk transient failure | org_id=%s customers=%s",
             org_id,
             len(customer_ids),
+        )
+        raise
+    except Exception as exc:
+        session.rollback()
+        logger.error(
+            "rescore_customers_chunk permanent failure | org_id=%s customers=%s: %s",
+            org_id,
+            len(customer_ids),
+            exc,
+            exc_info=True,
         )
         return {
             "status": "error",
@@ -641,7 +663,7 @@ def rescore_customers_chunk(
             "customer_count": len(customer_ids),
             "accounts_scored": 0,
             "scoring_errors": len(customer_ids),
-            "reason": str(exc),
+            "reason": "permanent_failure",
         }
     finally:
         session.close()
@@ -787,20 +809,29 @@ def _count_tier(
     *,
     org_id: uuid.UUID | None = None,
 ) -> int:
-    """Count customers at tier using latest churn_scores or metadata fallback."""
+    """Count active customers whose latest churn score is at the given tier."""
     from app.services.churn_service import TIER_DEFAULT_PROBABILITY
 
-    churn_query = select(ChurnScore).where(
-        ChurnScore.entity_type == "CUSTOMER",
-        ChurnScore.risk_tier == tier,
-    )
+    latest_scores = select(
+        ChurnScore.entity_id,
+        ChurnScore.risk_tier,
+        func.row_number()
+        .over(
+            partition_by=ChurnScore.entity_id,
+            order_by=ChurnScore.score_timestamp.desc(),
+        )
+        .label("row_num"),
+    ).where(ChurnScore.entity_type == "CUSTOMER")
     if org_id is not None:
-        churn_query = churn_query.where(ChurnScore.org_id == org_id)
-    rows = session.scalars(
-        churn_query.order_by(ChurnScore.score_timestamp.desc())
-    ).all()
-    if rows:
-        return len({row.entity_id for row in rows})
+        latest_scores = latest_scores.where(ChurnScore.org_id == org_id)
+    latest_subq = latest_scores.subquery()
+    latest_count = session.scalar(
+        select(func.count())
+        .select_from(latest_subq)
+        .where(latest_subq.c.row_num == 1, latest_subq.c.risk_tier == tier)
+    )
+    if latest_count and int(latest_count) > 0:
+        return int(latest_count)
 
     customer_query = select(Customer).where(Customer.account_status == "ACTIVE")
     if org_id is not None:

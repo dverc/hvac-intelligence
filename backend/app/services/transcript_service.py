@@ -82,10 +82,10 @@ class TranscriptService:
             call_data.get("transcript") or call.get("messages") or call_data.get("messages")
         )
 
-        churn_end = churn_start
+        # churn_risk_at_call_end is updated asynchronously by process_call_features
+        # after post-call rescoring — None at insert is intentional (not a copy of start).
+        churn_end = None
         intervention = False
-        if churn_start is not None and churn_end is not None:
-            intervention = (churn_start - churn_end) >= 0.15
 
         enrichment = _extract_vapi_enrichment(call_data, call)
         call_outcome = call.get("outcome") or call_data.get("outcome") or "RETAINED"

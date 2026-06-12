@@ -26,6 +26,7 @@ async def record_churn_event(
     db: AsyncSession,
     *,
     notes: str | None = None,
+    source_call_id: str | None = None,
 ) -> GroundTruthLabel:
     """Persist a labeled churn outcome with feature snapshot and model score."""
     cid = uuid.UUID(str(customer_id))
@@ -48,6 +49,7 @@ async def record_churn_event(
         feature_snapshot=features,
         churn_probability_at_time=Decimal(str(round(probability, 3))),
         notes=notes,
+        source_call_id=source_call_id,
     )
     db.add(label)
     await db.flush()
@@ -60,6 +62,7 @@ def record_churn_event_sync(
     session: Session,
     *,
     notes: str | None = None,
+    source_call_id: str | None = None,
 ) -> GroundTruthLabel:
     """Persist a labeled churn outcome from sync Celery workers."""
     cid = uuid.UUID(str(customer_id))
@@ -82,6 +85,7 @@ def record_churn_event_sync(
         feature_snapshot=features,
         churn_probability_at_time=Decimal(str(round(probability, 3))),
         notes=notes,
+        source_call_id=source_call_id,
     )
     session.add(label)
     session.flush()
