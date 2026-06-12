@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
@@ -26,6 +27,8 @@ from app.schemas.portal import (
 )
 from app.services.customer_service import CustomerService, normalize_phone
 from app.services.ticket_service import TicketService
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PORTAL_TZ = "America/Los_Angeles"
 
@@ -65,26 +68,48 @@ def _ticket_number(ticket_id: uuid.UUID) -> str:
     return f"TKT-{str(ticket_id).replace('-', '')[:8].upper()}"
 
 
+def _portal_org_fallback_allowed() -> bool:
+    """Allow DASHBOARD_ORG_ID fallback only in local dev/test environments."""
+    env = get_settings().ENVIRONMENT.lower()
+    return env in ("development", "test", "dev")
+
+
 async def resolve_portal_org_id(
     org_slug: str | None, db: AsyncSession
-) -> uuid.UUID:
-    """Resolve tenant org from portal slug/name; fall back to DASHBOARD_ORG_ID."""
+) -> uuid.UUID | None:
+    """Resolve tenant org from portal slug/name.
+
+    Returns None in production when org is missing or unknown. In development/test,
+    falls back to DASHBOARD_ORG_ID so single-tenant local dev keeps working.
+    """
     if org_slug and org_slug.strip():
         normalized = org_slug.strip()
-        org_id = (
+        rows = (
             await db.execute(
-                select(Organization.org_id).where(
+                select(Organization.org_id)
+                .where(
                     Organization.is_active.is_(True),
                     or_(
                         func.lower(Organization.slug) == normalized.lower(),
                         func.lower(Organization.org_name) == normalized.lower(),
                     ),
                 )
+                .order_by(Organization.created_at.asc())
+                .limit(2)
             )
-        ).scalar_one_or_none()
-        if org_id is not None:
-            return org_id
-    return get_fallback_dashboard_org_id()
+        ).all()
+        if rows:
+            if len(rows) > 1:
+                logger.warning(
+                    "Multiple organizations matched portal org %r; "
+                    "using oldest (org_id=%s)",
+                    normalized,
+                    rows[0][0],
+                )
+            return rows[0][0]
+    if _portal_org_fallback_allowed():
+        return get_fallback_dashboard_org_id()
+    return None
 
 
 class PortalService:

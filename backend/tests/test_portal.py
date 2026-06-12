@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -193,6 +194,41 @@ async def test_portal_identify_with_org_query_param(
     body = response.json()
     assert body["found"] is True
     assert body["customer_id"] == seeded_customer["customer_id"]
+
+
+@pytest.mark.asyncio
+async def test_portal_identify_missing_org_returns_400_in_production(
+    api_client: AsyncClient, monkeypatch
+):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "ENVIRONMENT", "production")
+
+    response = await api_client.post(
+        "/api/v1/portal/identify",
+        json={"phone": "+15559998888"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "org parameter required"
+
+
+@pytest.mark.asyncio
+async def test_resolve_portal_org_id_duplicate_org_names_returns_oldest(
+    db_session: AsyncSession, make_org, caplog
+):
+    first = await make_org(name="Duplicate Name Co", slug="dup-name-first")
+    second = await make_org(name="Duplicate Name Co", slug="dup-name-second")
+    await db_session.flush()
+    assert first.org_id != second.org_id
+
+    with caplog.at_level(logging.WARNING):
+        org_id = await resolve_portal_org_id("duplicate name co", db_session)
+
+    assert org_id == first.org_id
+    assert any(
+        "Multiple organizations matched portal org" in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
