@@ -17,6 +17,7 @@ from app.models.service_catalog import ServiceCatalog
 from app.rag.chunker import DocumentChunk, chunk_text
 from app.rag.constants import RAG_NAMESPACES, get_base_namespace, get_namespace
 from app.rag.indexer import KnowledgeIndexer
+from app.rag.sanitization import contains_rag_injection_pattern
 from app.schemas.service_catalog import (
     ServiceCatalogCreate,
     ServiceCatalogItem,
@@ -43,6 +44,10 @@ def _slugify(value: str) -> str:
 
 
 _PAGE_BREAK = "\n--- PAGE BREAK ---\n"
+
+
+class RagInjectionError(ValueError):
+    """Raised when uploaded knowledge content matches prompt-injection patterns."""
 
 
 def _extract_text(filename: str, content: bytes) -> tuple[str, list[str]]:
@@ -161,6 +166,10 @@ class KnowledgeService:
         prefixed_namespace = get_namespace(org.slug, base_namespace)
         doc_id = document_id or _slugify(Path(filename).stem)
         text, extract_warnings = _extract_text(filename, content)
+        if contains_rag_injection_pattern(text):
+            raise RagInjectionError(
+                "Document rejected: content contains disallowed prompt-injection patterns."
+            )
         chunks = chunk_text(
             text=text,
             source=filename,

@@ -11,7 +11,7 @@ from app.schemas.service_catalog import (
     ServiceCatalogListResponse,
     ServiceCatalogUpdate,
 )
-from app.services.knowledge_service import KnowledgeService
+from app.services.knowledge_service import KnowledgeService, RagInjectionError
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -61,6 +61,8 @@ async def upload_document(
             mime_type=file.content_type,
             chunking_strategy=chunking_strategy,
         )
+    except RagInjectionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

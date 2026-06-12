@@ -22,6 +22,13 @@ from app.core.metrics import observe_tool_execution
 from app.models.organization import Organization
 from app.rag.constants import get_base_namespace, get_namespace
 from app.rag.retriever import RAGRetriever
+from app.rag.sanitization import (
+    RAG_CONTENT_REMOVED,
+    RAG_MAX_CHUNK_CHARS,
+    RAG_REFERENCE_PREFIX,
+    RAG_REFERENCE_SUFFIX,
+    contains_rag_injection_pattern,
+)
 from app.schemas.customer import CustomerAddressPatch, CustomerUpdate
 from app.schemas.organization import OrganizationSettings
 from app.schemas.tools import (
@@ -60,6 +67,31 @@ from app.services.ticket_service import TicketService
 from app.services.window_parser import parse_date_range
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_rag_chunks(
+    chunks: list[dict[str, Any]],
+    org_id: uuid.UUID | None = None,
+) -> list[dict[str, Any]]:
+    """Wrap RAG text as reference-only content and strip known injection patterns."""
+    sanitized: list[dict[str, Any]] = []
+    for chunk in chunks:
+        item = dict(chunk)
+        text = str(item.get("text") or "")
+        source = item.get("source", "")
+        if contains_rag_injection_pattern(text):
+            logger.warning(
+                "RAG chunk flagged for injection pattern | org_id=%s source=%s",
+                org_id,
+                source,
+            )
+            text = RAG_CONTENT_REMOVED
+        if len(text) > RAG_MAX_CHUNK_CHARS:
+            text = text[:RAG_MAX_CHUNK_CHARS] + "...[truncated]"
+        item["text"] = f"{RAG_REFERENCE_PREFIX}{text}{RAG_REFERENCE_SUFFIX}"
+        sanitized.append(item)
+    return sanitized
+
 
 async def _find_named_technician_from_window(
     db: AsyncSession,
@@ -688,7 +720,8 @@ class ToolExecutor:
             top_k=parsed.top_k,
             filter_model=parsed.equipment_model,
         )
-        return json.dumps({"retrieved_context": chunks})
+        sanitized_chunks = _sanitize_rag_chunks(chunks, self.org_id)
+        return json.dumps({"retrieved_context": sanitized_chunks})
 
     async def execute_lookup_service_info(self, **kwargs: Any) -> str:
         try:
