@@ -106,14 +106,16 @@ class OutboundService:
         max_attempts: int,
     ) -> int:
         candidates = await self._customers_above_threshold(org_id, threshold)
-        count = 0
-        for customer, _ in candidates:
-            eligibility = await self.compliance.check_outbound_eligibility(
-                customer.customer_id, org_id, max_attempts=max_attempts
-            )
-            if eligibility["eligible"]:
-                count += 1
-        return count
+        if not candidates:
+            return 0
+        customers_by_id = {customer.customer_id: customer for customer, _ in candidates}
+        eligibility_map = await self.compliance.check_outbound_eligibility_batch(
+            list(customers_by_id),
+            org_id,
+            max_attempts=max_attempts,
+            customers_by_id=customers_by_id,
+        )
+        return sum(1 for result in eligibility_map.values() if result["eligible"])
 
     async def create_campaign(
         self,
@@ -153,13 +155,19 @@ class OutboundService:
         candidates = await self._customers_above_threshold(
             org_id, campaign.churn_score_threshold
         )
+        if not candidates:
+            return []
+
+        customers_by_id = {customer.customer_id: customer for customer, _ in candidates}
+        eligibility_map = await self.compliance.check_outbound_eligibility_batch(
+            list(customers_by_id),
+            org_id,
+            max_attempts=campaign.max_attempts,
+            customers_by_id=customers_by_id,
+        )
         items: list[dict[str, Any]] = []
         for customer, score in candidates:
-            eligibility = await self.compliance.check_outbound_eligibility(
-                customer.customer_id,
-                org_id,
-                max_attempts=campaign.max_attempts,
-            )
+            eligibility = eligibility_map[customer.customer_id]
             items.append(
                 {
                     "customer_id": str(customer.customer_id),
@@ -238,14 +246,18 @@ class OutboundService:
         total_consented = 0
         block_reasons: Counter[str] = Counter()
 
+        customers_by_id = {customer.customer_id: customer for customer, _ in candidates}
+        eligibility_map = await self.compliance.check_outbound_eligibility_batch(
+            list(customers_by_id),
+            campaign.org_id,
+            max_attempts=campaign.max_attempts,
+            customers_by_id=customers_by_id,
+        )
+
         try:
             for customer, _score in candidates:
                 total_attempted += 1
-                eligibility = await self.compliance.check_outbound_eligibility(
-                    customer.customer_id,
-                    campaign.org_id,
-                    max_attempts=campaign.max_attempts,
-                )
+                eligibility = eligibility_map[customer.customer_id]
                 if not eligibility["eligible"]:
                     reason = eligibility["reason"]
                     status_map = {

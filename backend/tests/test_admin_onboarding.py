@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -16,6 +17,7 @@ from app.core.config import get_settings
 from app.models.org_settings import OrgSettings
 from app.models.organization import Organization
 from app.models.user import User
+from app.services.admin_onboarding_service import AdminOnboardingService
 
 
 async def _create_dispatcher_user(db_session: AsyncSession) -> tuple[str, str]:
@@ -79,6 +81,27 @@ async def test_admin_can_list_organizations(auth_client):
 async def test_non_admin_cannot_list_organizations(dispatcher_client):
     response = await dispatcher_client.get("/api/v1/admin/organizations")
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_organizations_uses_single_query(db_session, make_org):
+    for idx in range(3):
+        org = await make_org(name=f"List Query Org {idx}")
+        db_session.add(
+            OrgSettings(
+                org_id=org.org_id,
+                display_name=org.org_name,
+                onboarding_step=idx,
+            )
+        )
+    await db_session.flush()
+
+    mock_execute = AsyncMock(wraps=db_session.execute)
+    with patch.object(db_session, "execute", mock_execute):
+        items = await AdminOnboardingService(db_session).list_organizations()
+
+    assert mock_execute.await_count == 1
+    assert len(items) >= 4
 
 
 @pytest.mark.asyncio

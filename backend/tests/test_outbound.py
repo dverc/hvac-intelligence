@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -131,6 +131,79 @@ def test_disclosure_text_always_includes_recording_mention():
 def test_disclosure_text_never_contains_hvac_intelligence():
     text = get_disclosure_text("Desert Air HVAC", "FRIENDLY")
     assert "HVAC Intelligence" not in text
+
+
+@pytest.mark.asyncio
+async def test_check_outbound_eligibility_batch_matches_individual_checks(
+    db_session, make_customer, seeded_customer
+):
+    service = ComplianceService(db_session)
+    eligible_customer = seeded_customer["customer"]
+    await service.record_consent(
+        eligible_customer.customer_id,
+        SEED_ORG_ID,
+        CONSENT_TYPE_OUTBOUND_CALL,
+        "WRITTEN_FORM",
+        "Batch test consent",
+    )
+
+    dnc_customer = await make_customer(org_id=SEED_ORG_ID, full_name="DNC Customer")
+    dnc_metadata = dict(dnc_customer.metadata_ or {})
+    dnc_metadata["dnc"] = True
+    dnc_customer.metadata_ = dnc_metadata
+
+    no_consent_customer = await make_customer(
+        org_id=SEED_ORG_ID, full_name="No Consent Customer"
+    )
+    await db_session.flush()
+
+    customer_ids = [
+        eligible_customer.customer_id,
+        dnc_customer.customer_id,
+        no_consent_customer.customer_id,
+    ]
+    customers_by_id = {
+        eligible_customer.customer_id: eligible_customer,
+        dnc_customer.customer_id: dnc_customer,
+        no_consent_customer.customer_id: no_consent_customer,
+    }
+
+    batch_results = await service.check_outbound_eligibility_batch(
+        customer_ids,
+        SEED_ORG_ID,
+        customers_by_id=customers_by_id,
+    )
+    for customer_id in customer_ids:
+        individual = await service.check_outbound_eligibility(customer_id, SEED_ORG_ID)
+        assert batch_results[customer_id] == individual
+
+    assert batch_results[eligible_customer.customer_id]["eligible"] is True
+    assert batch_results[dnc_customer.customer_id]["reason"] == "DNC_REGISTERED"
+    assert batch_results[no_consent_customer.customer_id]["reason"] == "NO_CONSENT"
+
+
+@pytest.mark.asyncio
+async def test_check_outbound_eligibility_batch_uses_bounded_queries(
+    db_session, make_customer
+):
+    customers = [
+        await make_customer(org_id=SEED_ORG_ID, full_name=f"Batch Customer {idx}")
+        for idx in range(8)
+    ]
+    customer_ids = [customer.customer_id for customer in customers]
+    customers_by_id = {customer.customer_id: customer for customer in customers}
+
+    service = ComplianceService(db_session)
+    mock_execute = AsyncMock(wraps=db_session.execute)
+    with patch.object(db_session, "execute", mock_execute):
+        results = await service.check_outbound_eligibility_batch(
+            customer_ids,
+            SEED_ORG_ID,
+            customers_by_id=customers_by_id,
+        )
+
+    assert mock_execute.await_count == 2
+    assert len(results) == len(customer_ids)
 
 
 @pytest.mark.asyncio

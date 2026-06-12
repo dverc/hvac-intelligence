@@ -200,6 +200,44 @@ def check_calling_hours(
     return start_hour <= local_now.hour < end_hour
 
 
+def _build_eligibility_result(
+    customer: Customer,
+    *,
+    has_consent: bool,
+    attempts_30d: int,
+    max_attempts: int,
+) -> dict[str, Any]:
+    metadata = dict(customer.metadata_ or {})
+    if bool(metadata.get("dnc")):
+        return {
+            "eligible": False,
+            "reason": "DNC_REGISTERED",
+            "checks": {"dnc": True},
+        }
+
+    phone = (customer.phone_primary or "").strip()
+    phone_valid = bool(phone) and bool(normalize_phone_to_e164(phone))
+    checks = {
+        "dnc": False,
+        "consent": has_consent,
+        "attempts_30d": attempts_30d,
+        "phone_valid": phone_valid,
+    }
+
+    if not has_consent:
+        return {"eligible": False, "reason": "NO_CONSENT", "checks": checks}
+    if attempts_30d >= max_attempts:
+        return {
+            "eligible": False,
+            "reason": "MAX_ATTEMPTS_REACHED",
+            "checks": checks,
+        }
+    if not phone_valid:
+        return {"eligible": False, "reason": "NO_PHONE", "checks": checks}
+
+    return {"eligible": True, "reason": "ELIGIBLE", "checks": checks}
+
+
 class ComplianceService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -210,20 +248,9 @@ class ComplianceService:
         org_id: uuid.UUID,
         max_attempts: int,
     ) -> int:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=OUTBOUND_ATTEMPT_LOOKBACK_DAYS)
-        count = (
-            await self.db.execute(
-                select(func.count())
-                .select_from(OutboundCallAttempt)
-                .where(
-                    OutboundCallAttempt.customer_id == customer_id,
-                    OutboundCallAttempt.org_id == org_id,
-                    OutboundCallAttempt.created_at >= cutoff,
-                    OutboundCallAttempt.status.notin_(("PENDING",)),
-                )
-            )
-        ).scalar_one()
-        return int(count)
+        del max_attempts
+        counts = await self._batch_recent_attempt_counts([customer_id], org_id)
+        return counts.get(customer_id, 0)
 
     async def _has_active_consent(
         self,
@@ -231,21 +258,121 @@ class ComplianceService:
         org_id: uuid.UUID,
         consent_type: str = CONSENT_TYPE_OUTBOUND_CALL,
     ) -> bool:
-        row = (
+        consented = await self._batch_active_consent_customer_ids(
+            [customer_id], org_id, consent_type
+        )
+        return customer_id in consented
+
+    async def _batch_fetch_customers(
+        self,
+        customer_ids: list[uuid.UUID],
+        org_id: uuid.UUID,
+    ) -> dict[uuid.UUID, Customer]:
+        if not customer_ids:
+            return {}
+        rows = (
             await self.db.execute(
-                select(ConsentRecord)
-                .where(
-                    ConsentRecord.customer_id == customer_id,
-                    ConsentRecord.org_id == org_id,
-                    ConsentRecord.consent_type == consent_type,
-                    ConsentRecord.consent_given.is_(True),
-                    ConsentRecord.revoked_at.is_(None),
+                select(Customer).where(
+                    Customer.customer_id.in_(customer_ids),
+                    Customer.org_id == org_id,
                 )
-                .order_by(ConsentRecord.consented_at.desc())
-                .limit(1)
             )
-        ).scalar_one_or_none()
-        return row is not None
+        ).scalars().all()
+        return {customer.customer_id: customer for customer in rows}
+
+    async def _batch_active_consent_customer_ids(
+        self,
+        customer_ids: list[uuid.UUID],
+        org_id: uuid.UUID,
+        consent_type: str = CONSENT_TYPE_OUTBOUND_CALL,
+    ) -> set[uuid.UUID]:
+        if not customer_ids:
+            return set()
+        latest_consent = (
+            select(
+                ConsentRecord.customer_id,
+                func.max(ConsentRecord.consented_at).label("max_consented_at"),
+            )
+            .where(
+                ConsentRecord.customer_id.in_(customer_ids),
+                ConsentRecord.org_id == org_id,
+                ConsentRecord.consent_type == consent_type,
+                ConsentRecord.consent_given.is_(True),
+                ConsentRecord.revoked_at.is_(None),
+            )
+            .group_by(ConsentRecord.customer_id)
+            .subquery()
+        )
+        rows = (
+            await self.db.execute(select(latest_consent.c.customer_id))
+        ).all()
+        return {row[0] for row in rows}
+
+    async def _batch_recent_attempt_counts(
+        self,
+        customer_ids: list[uuid.UUID],
+        org_id: uuid.UUID,
+    ) -> dict[uuid.UUID, int]:
+        if not customer_ids:
+            return {}
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=OUTBOUND_ATTEMPT_LOOKBACK_DAYS
+        )
+        rows = (
+            await self.db.execute(
+                select(
+                    OutboundCallAttempt.customer_id,
+                    func.count(),
+                )
+                .where(
+                    OutboundCallAttempt.customer_id.in_(customer_ids),
+                    OutboundCallAttempt.org_id == org_id,
+                    OutboundCallAttempt.created_at >= cutoff,
+                    OutboundCallAttempt.status.notin_(("PENDING",)),
+                )
+                .group_by(OutboundCallAttempt.customer_id)
+            )
+        ).all()
+        return {customer_id: int(count) for customer_id, count in rows}
+
+    async def check_outbound_eligibility_batch(
+        self,
+        customer_ids: list[uuid.UUID],
+        org_id: uuid.UUID,
+        *,
+        max_attempts: int = 2,
+        customers_by_id: dict[uuid.UUID, Customer] | None = None,
+    ) -> dict[uuid.UUID, dict[str, Any]]:
+        """Evaluate outbound eligibility for many customers in a fixed number of queries."""
+        if not customer_ids:
+            return {}
+
+        if customers_by_id is None:
+            customers_by_id = await self._batch_fetch_customers(customer_ids, org_id)
+
+        consent_ids = await self._batch_active_consent_customer_ids(
+            customer_ids, org_id
+        )
+        attempt_counts = await self._batch_recent_attempt_counts(customer_ids, org_id)
+
+        results: dict[uuid.UUID, dict[str, Any]] = {}
+        for customer_id in customer_ids:
+            customer = customers_by_id.get(customer_id)
+            if customer is None or customer.org_id != org_id:
+                results[customer_id] = {
+                    "eligible": False,
+                    "reason": "CUSTOMER_NOT_FOUND",
+                    "checks": {},
+                }
+                continue
+
+            results[customer_id] = _build_eligibility_result(
+                customer,
+                has_consent=customer_id in consent_ids,
+                attempts_30d=attempt_counts.get(customer_id, 0),
+                max_attempts=max_attempts,
+            )
+        return results
 
     async def check_outbound_eligibility(
         self,
@@ -254,47 +381,19 @@ class ComplianceService:
         *,
         max_attempts: int = 2,
     ) -> dict[str, Any]:
-        customer = await self.db.get(Customer, customer_id)
-        if customer is None or customer.org_id != org_id:
-            return {
+        results = await self.check_outbound_eligibility_batch(
+            [customer_id],
+            org_id,
+            max_attempts=max_attempts,
+        )
+        return results.get(
+            customer_id,
+            {
                 "eligible": False,
                 "reason": "CUSTOMER_NOT_FOUND",
                 "checks": {},
-            }
-
-        metadata = dict(customer.metadata_ or {})
-        dnc = bool(metadata.get("dnc"))
-        if dnc:
-            return {
-                "eligible": False,
-                "reason": "DNC_REGISTERED",
-                "checks": {"dnc": True},
-            }
-
-        has_consent = await self._has_active_consent(customer_id, org_id)
-        attempts_30d = await self._count_recent_attempts(customer_id, org_id, max_attempts)
-        phone = (customer.phone_primary or "").strip()
-        phone_valid = bool(phone) and bool(normalize_phone_to_e164(phone))
-
-        checks = {
-            "dnc": False,
-            "consent": has_consent,
-            "attempts_30d": attempts_30d,
-            "phone_valid": phone_valid,
-        }
-
-        if not has_consent:
-            return {"eligible": False, "reason": "NO_CONSENT", "checks": checks}
-        if attempts_30d >= max_attempts:
-            return {
-                "eligible": False,
-                "reason": "MAX_ATTEMPTS_REACHED",
-                "checks": checks,
-            }
-        if not phone_valid:
-            return {"eligible": False, "reason": "NO_PHONE", "checks": checks}
-
-        return {"eligible": True, "reason": "ELIGIBLE", "checks": checks}
+            },
+        )
 
     async def record_consent(
         self,

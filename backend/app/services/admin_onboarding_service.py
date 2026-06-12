@@ -7,7 +7,7 @@ import uuid
 from datetime import date
 
 from passlib.context import CryptContext
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.customer import Customer
@@ -135,12 +135,45 @@ class AdminOnboardingService:
         )
 
     async def list_organizations(self) -> list[AdminOrganizationListItem]:
-        orgs = (
-            await self.db.execute(select(Organization).order_by(Organization.org_name))
-        ).scalars().all()
+        user_counts = (
+            select(
+                User.org_id.label("org_id_str"),
+                func.count(User.id).label("user_count"),
+            )
+            .group_by(User.org_id)
+            .subquery()
+        )
+        technician_counts = (
+            select(
+                Technician.org_id.label("org_id"),
+                func.count(Technician.technician_id).label("technician_count"),
+            )
+            .group_by(Technician.org_id)
+            .subquery()
+        )
+        rows = (
+            await self.db.execute(
+                select(
+                    Organization,
+                    OrgSettings,
+                    func.coalesce(user_counts.c.user_count, 0),
+                    func.coalesce(technician_counts.c.technician_count, 0),
+                )
+                .outerjoin(OrgSettings, OrgSettings.org_id == Organization.org_id)
+                .outerjoin(
+                    user_counts,
+                    user_counts.c.org_id_str == cast(Organization.org_id, String),
+                )
+                .outerjoin(
+                    technician_counts,
+                    technician_counts.c.org_id == Organization.org_id,
+                )
+                .order_by(Organization.org_name)
+            )
+        ).all()
+
         items: list[AdminOrganizationListItem] = []
-        for org in orgs:
-            settings = await self._get_settings(org.org_id)
+        for org, settings, user_count, technician_count in rows:
             items.append(
                 AdminOrganizationListItem(
                     org_id=org.org_id,
@@ -150,8 +183,8 @@ class AdminOnboardingService:
                     plan_tier=org.plan_tier,
                     is_active=org.is_active,
                     status=_org_status(org, settings),
-                    user_count=await self._user_count(org.org_id),
-                    technician_count=await self._technician_count(org.org_id),
+                    user_count=int(user_count),
+                    technician_count=int(technician_count),
                     onboarding_completed=settings.onboarding_completed
                     if settings
                     else False,
