@@ -435,7 +435,7 @@ async def test_update_dispatch_address_correction_appended_to_notes(
 
 
 @pytest.mark.asyncio
-async def test_update_dispatch_cancel_sets_status_cancelled(
+async def test_update_dispatch_cancel_creates_approval_ticket_not_immediate_cancel(
     tool_executor, seeded_customer, db_session
 ):
     dispatch_result = json.loads(
@@ -451,12 +451,32 @@ async def test_update_dispatch_cancel_sets_status_cancelled(
     job_id = dispatch_result["job_id"]
 
     result = json.loads(
-        await tool_executor.execute_update_dispatch(job_id=job_id, cancel=True)
+        await tool_executor.execute_update_dispatch(
+            job_id=job_id,
+            cancel=True,
+            notes="Customer traveling out of town",
+        )
     )
-    assert result["status"] == "updated"
+    assert result["status"] == "pending_approval"
+    assert "cancellation request" in result["message"].lower()
+    assert "team member" in result["message"].lower()
 
     job = await db_session.get(DispatchJob, uuid.UUID(job_id))
-    assert job.job_status == "CANCELLED"
+    assert job is not None
+    assert job.job_status != "CANCELLED"
+
+    ticket_row = await db_session.execute(
+        select(SupportTicket).where(
+            SupportTicket.customer_id == uuid.UUID(seeded_customer["customer_id"]),
+            SupportTicket.ticket_type == "MANAGER_CALLBACK",
+            SupportTicket.subject == "Cancellation Request — Pending Approval",
+        )
+    )
+    ticket = ticket_row.scalars().first()
+    assert ticket is not None
+    assert job.job_number in ticket.description
+    assert "Customer traveling out of town" in ticket.description
+    assert ticket.priority == "P1"
 
 
 @pytest.mark.asyncio

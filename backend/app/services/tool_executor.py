@@ -982,8 +982,106 @@ class ToolExecutor:
             }
         )
 
+    async def _submit_dispatch_cancellation_request(
+        self,
+        parsed: UpdateDispatchArgs,
+        raw_kwargs: dict[str, Any],
+    ) -> str:
+        """Route voice-agent cancellation requests through human approval."""
+        from app.models.dispatch_job import DispatchJob
+        from sqlalchemy.orm import selectinload
+
+        if self.org_id is None:
+            return json.dumps(
+                {"error": "Tenant not resolved for this call; cannot process cancellation."}
+            )
+
+        job = await self.db.get(
+            DispatchJob,
+            uuid.UUID(parsed.job_id),
+            options=[selectinload(DispatchJob.customer)],
+        )
+        if job is None or job.org_id != self.org_id:
+            return json.dumps({"error": f"Dispatch job {parsed.job_id} not found"})
+
+        customer_name = (
+            job.customer.full_name if job.customer is not None else "Unknown customer"
+        )
+        reason = str(raw_kwargs.get("reason") or parsed.notes or "Not provided").strip()
+        if job.scheduled_window_start is not None:
+            scheduled_window = job.scheduled_window_start.isoformat()
+            if job.scheduled_window_end is not None:
+                scheduled_window = (
+                    f"{scheduled_window} to {job.scheduled_window_end.isoformat()}"
+                )
+        else:
+            scheduled_window = "Not scheduled"
+
+        description = (
+            f"Job ID: {parsed.job_id}\n"
+            f"Job Number: {job.job_number}\n"
+            f"Customer: {customer_name}\n"
+            f"Scheduled Window: {scheduled_window}\n"
+            f"Reason: {reason}"
+        )
+        ticket = await self.ticket_service.create_ticket(
+            customer_id=job.customer_id,
+            org_id=self.org_id,
+            ticket_type="MANAGER_CALLBACK",
+            subject="Cancellation Request — Pending Approval",
+            description=description,
+            priority="P1",
+        )
+        await log_action(
+            self.db,
+            str(self.org_id),
+            ACTOR_VAPI,
+            AUDIT_CREATE,
+            "support_ticket",
+            ticket["ticket_id"],
+            new_value={
+                "ticket_type": ticket["ticket_type"],
+                "subject": ticket["subject"],
+                "priority": ticket["priority"],
+                "job_id": parsed.job_id,
+            },
+            call_id=get_call_id() or None,
+        )
+        await log_action(
+            self.db,
+            str(self.org_id),
+            ACTOR_VAPI,
+            AUDIT_UPDATE,
+            "dispatch_job",
+            str(job.job_id),
+            new_value={
+                "action": "cancellation_request_submitted",
+                "ticket_id": ticket["ticket_id"],
+                "reason": reason,
+            },
+            call_id=get_call_id() or None,
+        )
+
+        message = (
+            "I've submitted a cancellation request for your appointment. "
+            "A team member will confirm the cancellation within 2 hours and "
+            "you'll receive notification."
+        )
+        return json.dumps(
+            {
+                "status": "pending_approval",
+                "job_id": str(job.job_id),
+                "job_number": job.job_number,
+                "ticket_id": ticket["ticket_id"],
+                "message": message,
+            }
+        )
+
     async def execute_update_dispatch(self, **kwargs: Any) -> str:
         parsed = UpdateDispatchArgs.model_validate(kwargs)
+        if parsed.cancel:
+            return await self._submit_dispatch_cancellation_request(parsed, kwargs)
+
         result = await self.dispatch_service.update_job(parsed, self.org_id)
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "Failed to update dispatch")})
