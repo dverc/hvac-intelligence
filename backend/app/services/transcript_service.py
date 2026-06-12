@@ -32,7 +32,11 @@ class TranscriptService:
         self._feature_extractor = FeatureExtractor()
 
     async def process_completed_call(
-        self, call_data: dict[str, Any], org_id: uuid.UUID
+        self,
+        call_data: dict[str, Any],
+        org_id: uuid.UUID,
+        *,
+        rag_chunks_used: list[dict[str, Any]] | None = None,
     ) -> Optional[dict[str, Any]]:
         call = call_data.get("call", call_data)
         call_id = call.get("id") or call_data.get("call_id")
@@ -114,6 +118,8 @@ class TranscriptService:
             intervention_successful=intervention,
             vapi_metadata=vapi_meta,
         )
+        if rag_chunks_used:
+            record.rag_chunks_used = rag_chunks_used
 
         if customer_id and transcript_json:
             call_features = self._extract_call_features(

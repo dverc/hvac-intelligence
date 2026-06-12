@@ -34,6 +34,11 @@ rag_retrieval_latency = Histogram(
     "rag_retrieval_latency_seconds",
     "Pinecone query latency",
 )
+rag_chunks_retrieved_total = Counter(
+    "rag_chunks_retrieved_total",
+    "RAG chunks retrieved during voice calls",
+    ["org_id"],
+)
 
 
 @contextmanager

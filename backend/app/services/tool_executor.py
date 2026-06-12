@@ -19,7 +19,14 @@ from app.core.cache import (
     cache_set,
     customer_cache_key,
 )
-from app.core.metrics import observe_tool_execution
+from app.core.cache import (
+    RAG_CHUNKS_CACHE_TTL,
+    cache_delete,
+    cache_get,
+    cache_set,
+    rag_chunks_cache_key,
+)
+from app.core.metrics import observe_tool_execution, rag_chunks_retrieved_total
 from app.models.organization import Organization
 from app.rag.constants import get_base_namespace, get_namespace
 from app.rag.retriever import RAGRetriever
@@ -69,6 +76,44 @@ from app.services.ticket_service import TicketService
 from app.services.window_parser import parse_date_range
 
 logger = logging.getLogger(__name__)
+
+_RAG_CHUNK_PREVIEW_LEN = 100
+
+
+def _build_rag_chunk_metadata(chunk: dict[str, Any]) -> dict[str, Any]:
+    """Lightweight chunk record for transcript quality tracking (no full text)."""
+    raw_text = str(chunk.get("text") or "")
+    score = chunk.get("similarity_score")
+    return {
+        "chunk_id": chunk.get("chunk_id"),
+        "source": str(chunk.get("source") or ""),
+        "similarity_score": float(score) if score is not None else None,
+        "text_preview": raw_text[:_RAG_CHUNK_PREVIEW_LEN],
+        "namespace": chunk.get("namespace"),
+    }
+
+
+async def _load_rag_chunks_from_cache(call_id: str) -> list[dict[str, Any]]:
+    cached = await cache_get(rag_chunks_cache_key(call_id))
+    if not cached:
+        return []
+    chunks = cached.get("chunks")
+    if isinstance(chunks, list):
+        return [dict(item) for item in chunks if isinstance(item, dict)]
+    return []
+
+
+async def _append_rag_chunks_to_cache(
+    call_id: str,
+    entries: list[dict[str, Any]],
+) -> None:
+    if not entries:
+        return
+    key = rag_chunks_cache_key(call_id)
+    existing = await cache_get(key) or {"chunks": []}
+    merged = list(existing.get("chunks") or [])
+    merged.extend(entries)
+    await cache_set(key, {"chunks": merged}, RAG_CHUNKS_CACHE_TTL)
 
 
 def _sanitize_rag_chunks(
@@ -258,6 +303,7 @@ class ToolExecutor:
         self.org_id: uuid.UUID | None = None
         self.org_slug: str | None = None
         self.org_settings: OrganizationSettings | None = None
+        self._rag_chunks_accumulator: list[dict[str, Any]] = []
 
     def set_tenant(
         self,
@@ -272,6 +318,48 @@ class ToolExecutor:
     @property
     def db(self) -> AsyncSession:
         return self.customer_service.db
+
+    async def _accumulate_rag_chunks(self, chunks: list[dict[str, Any]]) -> None:
+        """Record retrieved chunk metadata for call-quality tracking (best-effort)."""
+        if not chunks:
+            return
+        try:
+            entries = [_build_rag_chunk_metadata(chunk) for chunk in chunks]
+            self._rag_chunks_accumulator.extend(entries)
+            call_id = get_call_id()
+            if call_id:
+                await _append_rag_chunks_to_cache(call_id, entries)
+            org_label = str(self.org_id) if self.org_id is not None else "unknown"
+            rag_chunks_retrieved_total.labels(org_id=org_label).inc(len(entries))
+        except Exception:
+            logger.exception(
+                "RAG chunk tracking failed | org_id=%s call_id=%s",
+                self.org_id,
+                get_call_id(),
+            )
+
+    async def get_rag_chunks_summary(
+        self,
+        call_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return accumulated RAG chunk metadata for a call (cache-backed)."""
+        cid = call_id or get_call_id() or ""
+        if cid:
+            cached = await _load_rag_chunks_from_cache(cid)
+            if cached:
+                return cached
+        return list(self._rag_chunks_accumulator)
+
+    async def clear_rag_chunks_cache(self, call_id: str) -> None:
+        """Remove call-scoped RAG tracking data after transcript persistence."""
+        try:
+            await cache_delete(rag_chunks_cache_key(call_id))
+        except Exception:
+            logger.debug(
+                "Failed to clear RAG chunks cache | call_id=%s",
+                call_id,
+                exc_info=True,
+            )
 
     async def _log_tool_call_audit(
         self,
@@ -910,6 +998,7 @@ class ToolExecutor:
             top_k=parsed.top_k,
             filter_model=parsed.equipment_model,
         )
+        await self._accumulate_rag_chunks(chunks)
         sanitized_chunks = _sanitize_rag_chunks(chunks, self.org_id)
         return _tool_response_json(
             success=True,

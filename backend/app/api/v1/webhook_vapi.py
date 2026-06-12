@@ -136,10 +136,37 @@ def _normalize_phones_in_call_message(message: dict[str, Any]) -> None:
 async def _process_call_end_background(call_data: dict[str, Any], org_id: str) -> None:
     async with get_session_factory()() as session:
         try:
+            call = call_data.get("call", call_data)
+            call_id = str(call.get("id") or call_data.get("call_id") or "")
+
+            rag_chunks_used: list[dict[str, Any]] = []
+            tool_executor = None
+            if call_id:
+                try:
+                    tool_executor = await deps.build_tool_executor(session)
+                    rag_chunks_used = await tool_executor.get_rag_chunks_summary(call_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to load RAG chunk summary | call_id=%s",
+                        call_id,
+                    )
+
             service = TranscriptService(session)
             result = await service.process_completed_call(
-                call_data, uuid.UUID(org_id)
+                call_data,
+                uuid.UUID(org_id),
+                rag_chunks_used=rag_chunks_used or None,
             )
+
+            if call_id and rag_chunks_used and tool_executor is not None:
+                try:
+                    await tool_executor.clear_rag_chunks_cache(call_id)
+                except Exception:
+                    logger.debug(
+                        "Failed to clear RAG chunks cache | call_id=%s",
+                        call_id,
+                        exc_info=True,
+                    )
             if result and result.get("customer_id"):
                 duration = int(result.get("duration_seconds") or 0)
                 outcome = str(result.get("call_outcome") or "").upper()

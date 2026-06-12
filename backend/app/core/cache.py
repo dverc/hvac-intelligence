@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 CUSTOMER_CACHE_TTL = 300
 ORG_CACHE_TTL = 900
+RAG_CHUNKS_CACHE_TTL = 86400
 
 _redis_client: Any | None = None
 
@@ -35,6 +36,10 @@ def customer_cache_key(org_id: str, phone: str) -> str:
 
 def org_cache_key(org_id: str) -> str:
     return f"org:{org_id}:settings"
+
+
+def rag_chunks_cache_key(call_id: str) -> str:
+    return f"rag_chunks:{call_id}"
 
 
 async def cache_get(key: str) -> dict | None:
